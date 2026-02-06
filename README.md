@@ -6,7 +6,7 @@
 
 上线后访问：
 
-`https://<your-github-username>.github.io/<your-repo-name>/`
+https://fridayxiao.github.io/PM_Intern_Mock/
 
 说明：
 - 默认就是可玩版本，不需要 API Key。
