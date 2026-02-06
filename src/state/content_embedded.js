@@ -1,0 +1,454 @@
+// Fallback bundle for environments where `fetch("/content/...")` is unavailable
+// (for example, `file://`).
+//
+// Source of truth remains:
+// - public/content/public/scenes.zh-CN.json
+// - public/content/public/cards.zh-CN.json
+export const PUBLIC_EMBEDDED = {
+  scenes: [
+    {
+      id: "start",
+      title: "你即将扮演一名 AI 产品经理（实习模拟）",
+      tag: "Public",
+      body: "你将用 4 章完成一次“需求→洞察→设计→交付→复盘”的闭环。\n\nPublic 版本默认虚构化：不包含真实公司名、内部系统名与不可公开核验的真实指标。"
+    },
+    { id: "about", title: "About", body: "" },
+    {
+      id: "c1_intro",
+      chapter: 1,
+      tag: "立项",
+      title: "Chapter 1: 立项与目标拆分",
+      body: "背景：你所在的“潮流星球”平台准备上线一个宠物鉴别服务，用于提升用户活跃与信任。\n\n约束：\n- 时间：2 周内交付可灰度版本\n- 资源：算法 1 人、客户端 1 人、后端 1 人、运营 0.5 人\n- 风险：误判会引发信任问题；同时要避免过度承诺\n\n你要先做 2 件事：\n1) 明确这次 0-1 的成功标准；2) 把风险边界讲清楚。",
+      note: "提示：在资源有限时，最常见的失败不是“模型不够强”，而是口径不清、目标不聚焦、灰度与兜底缺失。",
+      options: [
+        {
+          id: "c1_opt_a",
+          label: "先定义北极星指标与最低可用体验（MVP）边界",
+          subtitle: "用一条主指标 + 2-3 个过程指标，确保可测与可灰度",
+          delta: { risk: -0.08, efficiency: 0.06, ux: 0.04 },
+          next: "c1_align"
+        },
+        {
+          id: "c1_opt_b",
+          label: "先把 AI 方案做满（追求“最强准确率”）再谈流程",
+          subtitle: "技术先行，但可能导致交付与灰度失控",
+          delta: { accuracy: 0.1, cost: 0.14, risk: 0.08, efficiency: -0.06 },
+          next: "c1_align"
+        }
+      ]
+    },
+    {
+      id: "c1_align",
+      chapter: 1,
+      tag: "立项",
+      title: "范围对齐与里程碑",
+      body: "团队对“先做什么”产生分歧：\n- 业务方希望一开始就做增长和传播\n- 技术团队担心模型与数据不足\n- 你只有 2 周灰度窗口\n\n你需要先对齐范围，再给出可执行的里程碑计划。",
+      roleplay: {
+        id: "rp_scope_align",
+        title: "范围对齐会",
+        scenario: "业务希望首发就做增长，但技术担心数据不足。你需要在 2 周灰度窗口内达成一致。",
+        goals: ["明确 MVP 范围", "锁定里程碑与风险边界"],
+        roles: ["业务负责人", "算法负责人", "客户端负责人"],
+        starter: [
+          { role: "业务负责人", text: "能不能首发就带裂变入口？否则增长太慢。" },
+          { role: "算法负责人", text: "训练数据不足，先做最小闭环比较稳。" }
+        ],
+        quickReplies: [
+          { label: "澄清目标", text: "我先确认北极星指标和灰度成功标准，再定范围。" },
+          { label: "给出范围", text: "建议先做入口→提交→报告的最小闭环，先验证，再扩展。" },
+          { label: "风险边界", text: "设定护栏阈值与回滚开关，误判或投诉升高即暂停。" }
+        ],
+        fallbacks: [
+          "我建议先对齐北极星指标和灰度目标，避免方向不一致。",
+          "先做最小闭环能降低风险，后续再加增长与传播。",
+          "我们必须先定义风险边界与回滚策略。"
+        ]
+      },
+      options: [
+        {
+          id: "c1_align_a",
+          label: "先做最小闭环（入口→提交→出报告）",
+          subtitle: "确保可灰度、可回滚，再逐步扩展",
+          delta: { efficiency: 0.08, risk: -0.05 },
+          next: "c1_task_milestones"
+        },
+        {
+          id: "c1_align_b",
+          label: "同步做增长与多场景（更大范围）",
+          subtitle: "覆盖面更广，但交付与灰度风险更高",
+          delta: { ux: 0.05, cost: 0.12, risk: 0.08 },
+          next: "c1_task_milestones"
+        }
+      ]
+    },
+    {
+      id: "c1_task_milestones",
+      chapter: 1,
+      tag: "任务",
+      title: "任务 1/13: 里程碑与风险边界",
+      body: "你要给出“2 周内可交付”的里程碑顺序，并提前设置风险边界，确保灰度可控。",
+      task: {
+        type: "milestone_plan",
+        prompt: "交付物 = 里程碑顺序 + 风险边界 + 时间线。请排序关键步骤，并选择至少 2 个风险边界。",
+        config: {},
+        onCompleteNext: "c1_task_funnel"
+      }
+    },
+    {
+      id: "c1_task_funnel",
+      chapter: 1,
+      tag: "任务",
+      title: "任务 2/13: 北极星指标与埋点设计",
+      body: "你要做的是“能被团队执行、能定位问题”的埋点方案。\n\n背景：宠物鉴别是新功能，团队最担心两件事：\n- 不知道用户卡在哪一步（入口/上传/等待/报告）\n- 指标口径不一致，导致灰度期无法判断好坏\n\n你的任务：\n1) 先选一个北极星指标（代表用户价值）；\n2) 再设计 6 个关键事件（含属性），把“浏览→进入→上传→提交→出结果”链路量化。",
+      task: {
+        type: "funnel_tracking",
+        prompt: "交付物 = 一页“埋点清单”。请选 1 个北极星指标，并设计 6 个关键事件（含属性），用于定位流程断点与口径冲突。",
+        config: {},
+        onCompleteNext: "c1_outro"
+      }
+    },
+    {
+      id: "c1_outro",
+      chapter: 1,
+      tag: "反馈",
+      title: "立项阶段小结",
+      body: "你把指标与埋点先立住了，这会让后续的 A/B 与迭代更科学。\n\n下一步：做竞品差异分析，提炼可复用优化点。",
+      options: [
+        {
+          id: "c1_next",
+          label: "进入 Chapter 2",
+          subtitle: "洞察：竞品拆解与用户路径",
+          delta: { efficiency: 0.02 },
+          next: "c2_intro"
+        }
+      ]
+    },
+    {
+      id: "c2_intro",
+      chapter: 2,
+      tag: "洞察",
+      title: "Chapter 2: 竞品拆解与用户路径",
+      body: "你调研了 3 个“相似能力”的产品（均为虚构同构）：\n- 识图王：入口浅，偏泛搜索；解释弱\n- 宠灵：响应快、结果分层清晰，但信任缺失、流程跳转多\n- 问答社区：有内容沉淀，但链路冗长、转化差\n\n你需要选 2 个竞品深挖，输出差异矩阵并给出 3 个可复用优化点。",
+      options: [
+        {
+          id: "c2_go",
+          label: "先定位转化瓶颈",
+          subtitle: "写清楚“哪里卡住了”与验证指标",
+          delta: { efficiency: 0.01 },
+          next: "c2_task_bottleneck"
+        }
+      ]
+    },
+    {
+      id: "c2_task_bottleneck",
+      chapter: 2,
+      tag: "任务",
+      title: "任务 3/13: 转化瓶颈假设",
+      body: "在做竞品之前，你需要先回答“用户卡在哪一步”，否则容易陷入堆功能。",
+      task: {
+        type: "bottleneck_hypothesis",
+        prompt: "交付物 = 瓶颈假设 + 验证指标。请选择瓶颈，写出假设并选择指标。",
+        config: {},
+        onCompleteNext: "c2_task_competitor"
+      }
+    },
+    {
+      id: "c2_task_competitor",
+      chapter: 2,
+      tag: "任务",
+      title: "任务 4/13: 竞品差异矩阵",
+      body: "背景：你手里只有 2 周灰度窗口，团队不想“拍脑袋”试错。\n\n你的任务：\n1) 从 3 个竞品里选 2 个深挖；\n2) 用 5 个维度做差异矩阵；\n3) 排序 5 个候选优化点，并写一句话结论。\n\n交付物：一页“竞品差异矩阵 + 优先级结论”，用于推动团队统一方向。",
+      task: {
+        type: "competitor_matrix",
+        prompt: "交付物 = 差异矩阵 + 优先级排序 + 一句话结论。请完成 5 个维度对比，并选出 3 个最值得先做的优化点。",
+        config: {
+          competitors: [
+            { id: "comp_a", name: "识图王", oneLiner: "入口浅，偏泛查询" },
+            { id: "comp_b", name: "宠灵", oneLiner: "响应快，信任弱" },
+            { id: "comp_c", name: "问答社区", oneLiner: "内容沉淀强，转化链路长" }
+          ]
+        },
+        onCompleteNext: "c2_outro"
+      }
+    },
+    {
+      id: "c2_outro",
+      chapter: 2,
+      tag: "反馈",
+      title: "洞察阶段小结",
+      body: "竞品拆解的价值在于“减少试错”：你用差异矩阵把问题聚焦到入口、信任、流程摩擦，并明确了优先级。",
+      options: [
+        {
+          id: "c2_next",
+          label: "进入 Chapter 3",
+          subtitle: "设计：体验流 + AI 方案取舍",
+          delta: { ux: 0.03 },
+          next: "c3_intro"
+        }
+      ]
+    },
+    {
+      id: "c3_intro",
+      chapter: 3,
+      tag: "设计",
+      title: "Chapter 3: 体验流 + AI 方案取舍",
+      body: "现在进入核心设计：\n- 体验流：上传规范、等待焦虑、信任表达\n- 技术流：相似检索 / 降噪与质量 / 分类三条线\n\n你要做一套“可上线、可灰度、可兜底”的组合方案。",
+      options: [
+        {
+          id: "c3_go",
+          label: "先设计体验流",
+          subtitle: "等待、信任与解释先站稳",
+          delta: { risk: -0.01 },
+          next: "c3_task_experience"
+        }
+      ]
+    },
+    {
+      id: "c3_task_experience",
+      chapter: 3,
+      tag: "任务",
+      title: "任务 5/13: 体验流设计",
+      body: "在模型还不完美时，体验流设计能显著降低焦虑与误解。",
+      task: {
+        type: "experience_flow",
+        prompt: "交付物 = 体验动作 + 等待文案。请选择 2 个体验动作，并写一句等待文案。",
+        config: {},
+        onCompleteNext: "c3_task_ai"
+      }
+    },
+    {
+      id: "c3_task_ai",
+      chapter: 3,
+      tag: "任务",
+      title: "任务 6/13: AI 方案取舍与兜底",
+      body: "背景：你准备做首次灰度上线，需要一套“可落地、可监控、可兜底”的 AI 组合方案。\n\n你的任务：\n1) 为相似检索 / 降噪与质量 / 分类三条线各选 1 个方案；\n2) 再选至少 2 个 bad case 兜底策略。\n\n交付物：一页“AI 方案组合 + 兜底清单”，可以直接进入技术评审。",
+      roleplay: {
+        id: "rp_tech_review",
+        title: "技术评审会",
+        scenario: "评审会上，算法担心性能与数据质量，业务担心交付节奏。你需要解释方案取舍与兜底。",
+        goals: ["说明选择理由", "明确监控与兜底"],
+        roles: ["算法负责人", "后端负责人", "业务负责人"],
+        starter: [
+          { role: "算法负责人", text: "相似检索会影响延迟，你怎么权衡？" },
+          { role: "业务负责人", text: "我们更关心信任感，报告里能说明什么？" }
+        ],
+        quickReplies: [
+          { label: "解释取舍", text: "我优先选可监控、可灰度的方案，并为低置信度准备兜底。" },
+          { label: "强调信任", text: "报告中会强调边界与证据，避免过度承诺。" },
+          { label: "承诺动作", text: "我会补一份性能预算和回滚策略，评审后更新。" }
+        ],
+        fallbacks: [
+          "我会用可监控的方案先灰度上线，并保留回滚与人工复核。",
+          "体验与信任优先，报告会强调边界条件与证据链。"
+        ]
+      },
+      task: {
+        type: "ai_tradeoff",
+        prompt: "交付物 = 方案组合 + 兜底清单。请选择 3 条能力各 1 个方案，并至少配置 2 个 bad case 兜底策略。",
+        config: {},
+        onCompleteNext: "c3_outro"
+      }
+    },
+    {
+      id: "c3_outro",
+      chapter: 3,
+      tag: "反馈",
+      title: "设计阶段小结",
+      body: "你的方案组合不仅追求准确率，也把“解释性、兜底、灰度风险”纳入约束。\n\n下一步：进入交付阶段，做灰度与反馈闭环。",
+      options: [
+        {
+          id: "c3_next",
+          label: "进入 Chapter 4",
+          subtitle: "交付：灰度、反馈闭环、复盘",
+          delta: { efficiency: 0.02 },
+          next: "c4_intro"
+        }
+      ]
+    },
+    {
+      id: "c4_intro",
+      chapter: 4,
+      tag: "交付",
+      title: "Chapter 4: 灰度与反馈闭环",
+      body: "你即将开始一套“真实工作场景”的 A/B 流程：\n1) 实验 Brief（主指标 / 护栏 / 停止条件）\n2) 埋点与曝光口径校验\n3) A/A 与 SRM 质检\n4) 分阶段放量与监控\n5) 正式 A/B 设计与结果解读\n6) triage 与迭代闭环\n\n灰度上线后你会收到各种反馈：情绪化吐槽、重复问题、图片质量极差、误报/漏报。",
+      roleplay: {
+        id: "rp_ab_kickoff",
+        title: "A/B Kickoff 会议",
+        scenario: "数据同学担心口径不一致，运营希望尽快放量，你需要对齐实验流程与风险控制。",
+        goals: ["统一实验流程", "明确质量检查与停线机制"],
+        roles: ["数据负责人", "运营负责人", "研发负责人"],
+        starter: [
+          { role: "数据负责人", text: "我们先做 A/A 和 SRM 吗？否则结果不可信。" },
+          { role: "运营负责人", text: "可以先放 30% 吗？我要尽快看到效果。" }
+        ],
+        quickReplies: [
+          { label: "先质检", text: "先做 A/A + SRM 质检，确认分流可信再放量。" },
+          { label: "定义护栏", text: "护栏恶化就停，先把停止条件写清楚。" },
+          { label: "分阶段放量", text: "建议 5%→20%→50% 放量，逐步监控主指标与护栏。" }
+        ],
+        fallbacks: [
+          "先做 A/A 与 SRM 质检，确保分流可信。",
+          "放量必须分阶段，护栏恶化就停。"
+        ]
+      },
+      options: [
+        {
+          id: "c4_go",
+          label: "开始实验流程",
+          subtitle: "从实验 Brief 写起",
+          delta: { risk: -0.01 },
+          next: "c4_task_ab_brief"
+        }
+      ]
+    },
+    {
+      id: "c4_task_ab_brief",
+      chapter: 4,
+      tag: "任务",
+      title: "任务 7/13: A/B 实验 Brief",
+      body: "实验开始前必须写清楚：主指标、护栏指标、Stop 条件和分群范围。",
+      task: {
+        type: "ab_brief",
+        prompt: "交付物 = 实验 Brief（主指标/护栏/分群/Stop 条件）。",
+        config: {},
+        onCompleteNext: "c4_task_ab_instrumentation"
+      }
+    },
+    {
+      id: "c4_task_ab_instrumentation",
+      chapter: 4,
+      tag: "任务",
+      title: "任务 8/13: 曝光与口径校验",
+      body: "如果曝光事件与指标口径不一致，A/B 结果会失真。你需要先统一口径，再排查埋点缺口。",
+      task: {
+        type: "ab_instrumentation",
+        prompt: "交付物 = 曝光事件 + 时间窗 + 分母口径 + 埋点缺口。",
+        config: {},
+        onCompleteNext: "c4_task_ab_quality"
+      }
+    },
+    {
+      id: "c4_task_ab_quality",
+      chapter: 4,
+      tag: "任务",
+      title: "任务 9/13: A/A + SRM 质检",
+      body: "正式实验前，先用 A/A 检查分流与埋点是否稳定，再用 SRM 检查样本比例是否异常。",
+      task: {
+        type: "ab_quality",
+        prompt: "交付物 = 质检结论（原因 + 动作）。",
+        config: {},
+        onCompleteNext: "c4_task_ab_ramp"
+      }
+    },
+    {
+      id: "c4_task_ab_ramp",
+      chapter: 4,
+      tag: "任务",
+      title: "任务 10/13: 分阶段放量",
+      body: "放量要逐阶段观察主指标与护栏变化，异常时需要停留或回滚。",
+      task: {
+        type: "ab_ramp",
+        prompt: "交付物 = 每个放量阶段的决策。",
+        config: {},
+        onCompleteNext: "c4_task_abtest"
+      }
+    },
+    {
+      id: "c4_task_abtest",
+      chapter: 4,
+      tag: "任务",
+      title: "任务 11/13: A/B 实验设计",
+      body: "灰度期需要用实验去验证关键改动的因果，不要靠主观判断。",
+      task: {
+        type: "ab_test_design",
+        prompt: "交付物 = A/B 设计单。请选择实验变量、主指标、护栏、样本与周期，并写出假设。",
+        config: {},
+        onCompleteNext: "c4_task_abreadout"
+      }
+    },
+    {
+      id: "c4_task_abreadout",
+      chapter: 4,
+      tag: "任务",
+      title: "任务 12/13: A/B 结果解读",
+      body: "实验结果回来了：你需要结合主指标与护栏指标做出决策，并写清理由。",
+      task: {
+        type: "ab_test_readout",
+        prompt: "交付物 = 结果解读 + 决策理由。请选择决策并给出一句话理由。",
+        config: {},
+        onCompleteNext: "c4_task_triage"
+      }
+    },
+    {
+      id: "c4_task_triage",
+      chapter: 4,
+      tag: "任务",
+      title: "任务 13/13: triage 与迭代闭环",
+      body: "背景：灰度上线后，你收到大量噪声反馈。\n\n你的任务：\n1) 把每条反馈归因到“数据/模型/交互/运营/文案/系统”；\n2) 选 2 个改动进入下一迭代。\n\n交付物：一页“反馈归因表 + 迭代清单”，让团队知道下一步怎么做。",
+      task: {
+        type: "triage_loop",
+        prompt: "交付物 = 反馈归因表 + 迭代清单。请为每条反馈选择归因桶，并挑选 2 个改动进入下一迭代。",
+        config: {},
+        onCompleteNext: "end"
+      }
+    },
+    {
+      id: "end",
+      title: "结算：生成你的项目复盘卡",
+      tag: "结算",
+      body: "你完成了一次端到端 PM 闭环。\n\n接下来你可以：\n- 复制“作品集摘要”写进简历\n- 用历史决策解释你的取舍逻辑\n- 开启下一局，尝试不同策略，看指标如何变化"
+    }
+  ],
+  cards: [
+    {
+      id: "ns_metric",
+      title: "北极星指标",
+      body: "北极星指标是“一个阶段最能代表用户价值的主指标”。它通常配合 2-3 个过程指标，帮助定位断点。关键是口径一致、可被行动影响。"
+    },
+    {
+      id: "ab_process",
+      title: "A/B 实验流程",
+      body: "推荐流程：写实验 Brief（主指标/护栏/Stop 条件）→ 统一埋点口径 → A/A 与 SRM 质检 → 分阶段放量 → 正式实验 → 结果解读与复盘。先把“可信”做出来，再讨论提升。"
+    },
+    {
+      id: "ab_quality",
+      title: "A/A 与 SRM",
+      body: "A/A 用于验证分流与埋点是否稳定；SRM 用于检查样本比例是否异常。任一异常都可能让实验结论失真。"
+    },
+    {
+      id: "ab_guardrail",
+      title: "护栏指标",
+      body: "护栏指标用来保护体验与风险：投诉率、误判率、时延、成本等。主指标上涨但护栏恶化时，通常需要降速、分群或回滚。"
+    },
+    {
+      id: "ab_readout",
+      title: "结果解读",
+      body: "解读时同时看：主指标变化、护栏变化、分群差异、可解释性。不要只看 p 值，注意实际业务意义。"
+    },
+    {
+      id: "ai_tradeoff",
+      title: "AI PM 常见取舍",
+      body: "准确率不是唯一目标。你需要同时考虑数据质量、时延、成本、可解释性、上线风险、监控与兜底。低置信度拒答与人工复核往往比“强行给答案”更可靠。"
+    },
+    {
+      id: "gray_release",
+      title: "灰度与回滚",
+      body: "灰度上线的核心是“可控”：先限定人群与场景，再逐步放量；必须有回滚开关与监控阈值。没有回滚，就没有灰度。"
+    },
+    {
+      id: "metric_consistency",
+      title: "口径一致性",
+      body: "同一个指标要确保定义一致（时间窗、分母、去重规则）。否则会出现“看板好看但体验变差”的错觉。"
+    },
+    {
+      id: "bad_case",
+      title: "Bad Case 处理",
+      body: "Bad case 是系统可靠性的底线。常见方法：低置信度拒答/转人工、上传质量门槛、申诉入口与回归集。"
+    },
+    {
+      id: "monitoring",
+      title: "上线监控与漂移",
+      body: "模型上线后要关注分布漂移（数据变了、用户变了）。建立回归集与自动报警，避免“线上慢慢变差”。"
+    }
+  ]
+};

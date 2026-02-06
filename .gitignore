@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.DS_Store
+output/
+.env
+
+# Private content files (local only)
+public/content/private/scenes.zh-CN.json
+public/content/private/cards.zh-CN.json
