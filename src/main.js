@@ -7,8 +7,6 @@ import { renderTask } from "./tasks/index.js";
 
 const APP_VERSION = "0.1.0";
 const SAVE_KEY = "ai_pm_sim_save_v1";
-const ACTION_FEEDBACK_DURATION_MS = 12000;
-const ACTION_FEEDBACK_VISIBLE_MS = 14000;
 const MILESTONE_CUE_VISIBLE_MS = 5200;
 const XP_PER_CHOICE = 10;
 const XP_PER_TASK = 35;
@@ -330,7 +328,6 @@ const store = createStore({
 let content = null;
 let renderScheduled = false;
 let healthPollTimer = null;
-let impactTimer = null;
 let milestoneCueTimer = null;
 
 function initGlobalHooks() {
@@ -412,6 +409,59 @@ function metricLabel(key) {
 function fmtMetric(v) {
   const sign = v > 0 ? "+" : "";
   return `${sign}${v.toFixed(2)}`;
+}
+
+function isPositiveMetricDelta(metricKey, delta) {
+  if (typeof delta !== "number" || Math.abs(delta) <= 0.0001) return false;
+  const direction = metricKey === "cost" || metricKey === "risk" ? -1 : 1;
+  return delta * direction > 0;
+}
+
+function getFeedbackOutcome(delta) {
+  const entries = Object.entries(delta ?? {}).filter(([, value]) => typeof value === "number" && Math.abs(value) > 0.0001);
+  if (!entries.length) {
+    return {
+      tone: "neutral",
+      summary: "本次操作影响较小，建议结合后续数据再判断。",
+      suggestion: "下一步建议：继续推进当前章节任务，优先补充可验证数据。",
+      chips: []
+    };
+  }
+  const positives = [];
+  const negatives = [];
+  for (const [key, value] of entries) {
+    const row = { key, value, abs: Math.abs(value), positive: isPositiveMetricDelta(key, value) };
+    if (row.positive) positives.push(row);
+    else negatives.push(row);
+  }
+  positives.sort((a, b) => b.abs - a.abs);
+  negatives.sort((a, b) => b.abs - a.abs);
+  let tone = "neutral";
+  if (positives.length > negatives.length) tone = "good";
+  if (negatives.length > positives.length) tone = "bad";
+  const best = positives[0];
+  const risk = negatives[0];
+  const summary =
+    tone === "good"
+      ? `整体正向：${best ? `${metricLabel(best.key)}改善` : "收益侧提升"}。`
+      : tone === "bad"
+        ? `需要警惕：${risk ? `${metricLabel(risk.key)}恶化` : "关键指标承压"}。`
+        : "整体中性：收益与风险并存。";
+  const suggestion =
+    tone === "good"
+      ? "下一步建议：保持当前策略，并在下一节点复核护栏指标。"
+      : tone === "bad"
+        ? "下一步建议：优先降风险或补兜底，再继续放量。"
+        : "下一步建议：补充验证数据，再决定是否扩大策略。";
+  const chips = entries
+    .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+    .slice(0, 4)
+    .map(([key, value]) => ({
+      key,
+      text: `${metricLabel(key)} ${fmtMetric(value)}`,
+      positive: isPositiveMetricDelta(key, value)
+    }));
+  return { tone, summary, suggestion, chips };
 }
 
 function doSave() {
@@ -535,16 +585,6 @@ function setActionFeedback({ title, note, delta }) {
       }
     }
   });
-  clearTimeout(impactTimer);
-  impactTimer = setTimeout(() => {
-    const nowState = store.get();
-    store.set({
-      ui: {
-        ...(nowState.ui ?? {}),
-        actionFeedback: null
-      }
-    });
-  }, ACTION_FEEDBACK_DURATION_MS);
 }
 
 function setMilestoneCue({ title, subtitle, badges = [] }) {
@@ -1085,7 +1125,8 @@ function renderMetricsPanel() {
   const pulse = state.ui?.metricPulse ?? null;
   const pulseActive = pulse?.at && Date.now() - pulse.at < 2800;
   const feedback = state.ui?.actionFeedback;
-  const showFeedbackHint = Boolean(feedback?.at && Date.now() - feedback.at < ACTION_FEEDBACK_VISIBLE_MS);
+  const showFeedbackHint = Boolean(feedback);
+  const outcome = getFeedbackOutcome(feedback?.delta ?? {});
   return `
     <div class="panel metrics-panel">
       <div class="hd">
@@ -1095,7 +1136,7 @@ function renderMetricsPanel() {
       <div class="bd">
         ${
           showFeedbackHint
-            ? `<div class="impact-mini">${escapeHtml(feedback.title ?? "决策反馈")}：指标已更新</div>`
+            ? `<div class="impact-mini ${outcome.tone}">${escapeHtml(feedback.title ?? "决策反馈")}：${escapeHtml(outcome.summary)}</div>`
             : ""
         }
         <div class="metrics">
@@ -1105,14 +1146,15 @@ function renderMetricsPanel() {
               const p = Math.round(percentFromMetricValue(v) * 100);
               const d = pulseActive ? pulse?.delta?.[k] : undefined;
               const hasDelta = typeof d === "number" && Math.abs(d) > 0.0001;
-              const deltaClass = hasDelta ? (d > 0 ? "metric-up" : "metric-down") : "";
+              const isPositive = hasDelta ? isPositiveMetricDelta(k, d) : false;
+              const deltaClass = hasDelta ? (isPositive ? "metric-up" : "metric-down") : "";
               return `
                 <div class="metric ${deltaClass}">
                   <div class="row">
                     <div class="name">${metricLabel(k)}</div>
                     <div class="val">
                       ${fmtMetric(v)} (${p}%)
-                      ${hasDelta ? `<span class="metric-delta ${d > 0 ? "up" : "down"}">${fmtMetric(d)}</span>` : ""}
+                      ${hasDelta ? `<span class="metric-delta ${isPositive ? "up" : "down"}">${fmtMetric(d)}</span>` : ""}
                     </div>
                   </div>
                   <div class="bar"><i style="width:${p}%"></i></div>
@@ -1122,7 +1164,7 @@ function renderMetricsPanel() {
             .join("")}
         </div>
         <div class="inline-note" style="margin-top:12px">
-          指标不是“真实业务数据”，而是把取舍结果映射成可解释的训练反馈。
+          指标不是“真实业务数据”，而是把取舍结果映射成可解释的训练反馈（其中 Cost/Risk 下降属于正向变化）。
         </div>
       </div>
     </div>
@@ -1452,16 +1494,22 @@ function renderRightPanel() {
 
 function renderActionFeedback() {
   const feedback = store.get().ui?.actionFeedback;
-  if (!feedback?.at || Date.now() - feedback.at > ACTION_FEEDBACK_VISIBLE_MS) return "";
+  if (!feedback) return "";
   const levelUp = /升阶/.test(String(feedback.title ?? ""));
+  const outcome = getFeedbackOutcome(feedback.delta ?? {});
   const deltaEntries = Object.entries(feedback.delta ?? {}).filter(([, value]) => typeof value === "number" && Math.abs(value) > 0.0001);
   const deltaText = deltaEntries.length
     ? deltaEntries.map(([key, value]) => `${metricLabel(key)} ${fmtMetric(value)}`).join(" ｜ ")
     : "本次操作不改变指标";
   return `
-    <div class="impact-banner ${levelUp ? "level-up" : ""}">
+    <div class="impact-banner ${levelUp ? "level-up" : ""} ${outcome.tone}">
       <div class="title">${escapeHtml(feedback.title ?? "决策已生效")}</div>
       <div class="delta">${escapeHtml(deltaText)}</div>
+      <div class="impact-summary">${escapeHtml(outcome.summary)}</div>
+      <div class="impact-chips">
+        ${outcome.chips.map((chip) => `<span class="impact-chip ${chip.positive ? "good" : "bad"}">${escapeHtml(chip.text)}</span>`).join("")}
+      </div>
+      <div class="impact-suggestion">${escapeHtml(outcome.suggestion)}</div>
       ${feedback.note ? `<div class="note">${escapeHtml(feedback.note)}</div>` : ""}
     </div>
   `;
