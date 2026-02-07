@@ -330,6 +330,91 @@ let renderScheduled = false;
 let healthPollTimer = null;
 let milestoneCueTimer = null;
 
+function safeCssEscape(value) {
+  if (window.CSS?.escape) return window.CSS.escape(String(value));
+  return String(value).replace(/["\\]/g, "\\$&");
+}
+
+function snapshotTaskDraft(scene) {
+  if (!scene?.task) return null;
+  const taskRoot = document.getElementById("task-ui");
+  if (!taskRoot) return null;
+  const controls = Array.from(taskRoot.querySelectorAll("input, textarea, select"));
+  if (!controls.length) return null;
+  const fields = controls.map((el, index) => ({
+    tag: el.tagName.toLowerCase(),
+    type: (el.type || "").toLowerCase(),
+    index,
+    id: el.id || "",
+    name: el.getAttribute("name") || "",
+    valueAttr: el.getAttribute("value") || "",
+    value: "value" in el ? el.value : "",
+    checked: "checked" in el ? Boolean(el.checked) : false
+  }));
+  const activeEl = document.activeElement;
+  const activeIndex = activeEl && taskRoot.contains(activeEl) ? controls.indexOf(activeEl) : -1;
+  const activeSelectionStart = typeof activeEl?.selectionStart === "number" ? activeEl.selectionStart : null;
+  const activeSelectionEnd = typeof activeEl?.selectionEnd === "number" ? activeEl.selectionEnd : null;
+  return {
+    sceneId: scene.id,
+    taskType: scene.task.type,
+    fields,
+    activeIndex,
+    activeSelectionStart,
+    activeSelectionEnd
+  };
+}
+
+function findDraftControl(taskRoot, controls, field) {
+  if (field.id) {
+    return taskRoot.querySelector(`#${safeCssEscape(field.id)}`);
+  }
+  if (field.name && field.valueAttr) {
+    const name = safeCssEscape(field.name);
+    const valueAttr = safeCssEscape(field.valueAttr);
+    const byNameValue = taskRoot.querySelector(`[name="${name}"][value="${valueAttr}"]`);
+    if (byNameValue) return byNameValue;
+  }
+  return controls[field.index] ?? null;
+}
+
+function restoreTaskDraft(scene, draft) {
+  if (!scene?.task || !draft) return;
+  if (draft.sceneId !== scene.id || draft.taskType !== scene.task.type) return;
+  const taskRoot = document.getElementById("task-ui");
+  if (!taskRoot) return;
+  const controls = Array.from(taskRoot.querySelectorAll("input, textarea, select"));
+  if (!controls.length) return;
+
+  for (const field of draft.fields) {
+    const el = findDraftControl(taskRoot, controls, field);
+    if (!el) continue;
+    const type = field.type;
+    if (type === "checkbox" || type === "radio") {
+      if ("checked" in el && el.checked !== field.checked) {
+        el.checked = field.checked;
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      continue;
+    }
+    if ("value" in el && el.value !== field.value) {
+      el.value = field.value;
+      const evtName = el.tagName.toLowerCase() === "select" ? "change" : "input";
+      el.dispatchEvent(new Event(evtName, { bubbles: true }));
+    }
+  }
+
+  if (draft.activeIndex >= 0) {
+    const activeEl = controls[draft.activeIndex];
+    if (activeEl && typeof activeEl.focus === "function") {
+      activeEl.focus();
+      if (typeof activeEl.setSelectionRange === "function" && typeof draft.activeSelectionStart === "number" && typeof draft.activeSelectionEnd === "number") {
+        activeEl.setSelectionRange(draft.activeSelectionStart, draft.activeSelectionEnd);
+      }
+    }
+  }
+}
+
 function initGlobalHooks() {
   window.render_game_to_text = () => {
     const state = store.get();
@@ -1885,6 +1970,8 @@ function renderMistakesModal() {
 
 function render() {
   const state = store.get();
+  const sceneBeforeRender = getScene();
+  const taskDraft = snapshotTaskDraft(sceneBeforeRender);
   const html = `
     <canvas id="game-canvas" class="bg-canvas"></canvas>
     <div class="app-shell">
@@ -1911,7 +1998,10 @@ function render() {
   wireEvents();
 
   const scene = getScene();
-  if (scene?.task) mountTask(scene);
+  if (scene?.task) {
+    mountTask(scene);
+    restoreTaskDraft(scene, taskDraft);
+  }
 }
 
 function wireEvents() {
@@ -2648,40 +2738,56 @@ function startHealthPolling() {
   }, 30000);
 }
 
+function isSameHealth(a, b) {
+  return Boolean(a?.ok) === Boolean(b?.ok) && Boolean(a?.checked) === Boolean(b?.checked) && String(a?.message ?? "") === String(b?.message ?? "");
+}
+
 async function checkAiHealth({ silent = false } = {}) {
   const previous = store.get().roleplay ?? {};
-  store.set({
-    roleplay: {
-      ...previous,
-      healthChecking: true
-    }
-  });
+  if (!silent) {
+    store.set({
+      roleplay: {
+        ...previous,
+        healthChecking: true
+      }
+    });
+  }
   try {
     const res = await fetch("/api/health");
     const text = await res.text();
     const json = safeJsonParse(text);
     const ok = Boolean(res.ok && json?.ok);
     const message = typeof json?.message === "string" && json.message ? json.message : ok ? "ready" : `http_${res.status}`;
-    store.set({
-      roleplay: {
-        ...(store.get().roleplay ?? {}),
-        healthChecking: false,
-        health: { ok, checked: true, message }
-      }
-    });
+    const currentRoleplay = store.get().roleplay ?? {};
+    const nextHealth = { ok, checked: true, message };
+    const healthChanged = !isSameHealth(currentRoleplay.health, nextHealth);
+    if (healthChanged || currentRoleplay.healthChecking) {
+      store.set({
+        roleplay: {
+          ...currentRoleplay,
+          healthChecking: false,
+          health: nextHealth
+        }
+      });
+    }
     if (!silent) {
       if (ok) flashToast("AI 服务已连接");
       else if (message === "missing_api_key") flashToast("AI 服务已启动，但未配置 API Key");
       else flashToast("未检测到 AI 服务，已使用离线模式");
     }
   } catch {
-    store.set({
-      roleplay: {
-        ...(store.get().roleplay ?? {}),
-        healthChecking: false,
-        health: { ok: false, checked: true, message: "unreachable" }
-      }
-    });
+    const currentRoleplay = store.get().roleplay ?? {};
+    const nextHealth = { ok: false, checked: true, message: "unreachable" };
+    const healthChanged = !isSameHealth(currentRoleplay.health, nextHealth);
+    if (healthChanged || currentRoleplay.healthChecking) {
+      store.set({
+        roleplay: {
+          ...currentRoleplay,
+          healthChecking: false,
+          health: nextHealth
+        }
+      });
+    }
     if (!silent) flashToast("未检测到 AI 服务，已使用离线模式");
   }
 }

@@ -337,13 +337,11 @@ button:disabled {
 .metric.metric-up {
   border-color: rgba(52, 211, 153, 0.42);
   background: rgba(52, 211, 153, 0.08);
-  animation: pulse-up 520ms ease;
 }
 
 .metric.metric-down {
   border-color: rgba(251, 113, 133, 0.42);
   background: rgba(251, 113, 133, 0.08);
-  animation: pulse-down 520ms ease;
 }
 
 .scene h3 {
@@ -569,7 +567,6 @@ label {
   background: linear-gradient(135deg, rgba(245, 158, 11, 0.19), rgba(124, 92, 255, 0.2));
   padding: 12px 14px;
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
-  animation: banner-in 200ms ease;
 }
 
 .impact-banner .title {
@@ -637,7 +634,7 @@ label {
 }
 
 .impact-banner.fresh {
-  animation: banner-in 200ms ease, level-up-flash 760ms ease 1;
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.26), 0 14px 30px rgba(0, 0, 0, 0.3);
 }
 
 .impact-banner.good {
