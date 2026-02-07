@@ -93,6 +93,16 @@ function systemPrompt(action) {
       "生成 1 组 A/B 结果样本。",
       '格式：{"ab_result":{"primary_metric":"...","lift":"+x%","p_value":"0.xx","guardrail":"..."}, "result":"一句话解读"}'
     ],
+    interview_duel_question: [
+      "生成 1 个互联网产品经理面试追问题（贴近实战，不要八股）。",
+      "结合用户当前项目上下文，问题要可回答、可评估。",
+      '格式：{"question":"...","focus":"考察点","rubric":["要点1","要点2","要点3"],"followup":"追问"}'
+    ],
+    interview_duel_review: [
+      "你是面试官，评估候选人的单条回答。",
+      "打分 1-5，给出优点、缺口和下一步建议，避免毒舌。",
+      '格式：{"score":4,"verdict":"总体评价","strength":"亮点","miss":"缺口","next":"改进建议"}'
+    ],
     launch_checklist: [
       "生成 4 条上线检查清单。",
       '格式：{"items":["...","...","...","..."]}'
@@ -161,6 +171,8 @@ app.post("/api/ai", async (req, res) => {
     "bad_case_batch",
     "tech_review",
     "ab_result_sample",
+    "interview_duel_question",
+    "interview_duel_review",
     "launch_checklist"
   ];
   if (!allowed.includes(action)) {

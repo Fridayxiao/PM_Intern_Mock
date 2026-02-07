@@ -3,8 +3,6 @@ import { PUBLIC_EMBEDDED } from "./content_embedded.js";
 
 const PUBLIC_SCENES = "/content/public/scenes.zh-CN.json";
 const PUBLIC_CARDS = "/content/public/cards.zh-CN.json";
-const PRIVATE_SCENES = "/content/private/scenes.zh-CN.json";
-const PRIVATE_CARDS = "/content/private/cards.zh-CN.json";
 
 async function fetchJson(url) {
   const res = await fetch(url, { cache: "no-store" });
@@ -18,22 +16,7 @@ async function fetchJson(url) {
   return parsed;
 }
 
-export async function loadContentBundle(mode) {
-  if (mode === "__probe_private__") {
-    try {
-      await fetchJson(PRIVATE_SCENES);
-      await fetchJson(PRIVATE_CARDS);
-      return { privateAvailable: true };
-    } catch {
-      return { privateAvailable: false };
-    }
-  }
-
-  if (mode === "private") {
-    const [scenes, cards] = await Promise.all([fetchJson(PRIVATE_SCENES), fetchJson(PRIVATE_CARDS)]);
-    return { scenes: scenes.scenes ?? [], cards: cards.cards ?? [], meta: { mode } };
-  }
-
+export async function loadContentBundle() {
   try {
     const [scenes, cards] = await Promise.all([fetchJson(PUBLIC_SCENES), fetchJson(PUBLIC_CARDS)]);
     return { scenes: scenes.scenes ?? [], cards: cards.cards ?? [], meta: { mode: "public" } };

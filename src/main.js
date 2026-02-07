@@ -7,6 +7,301 @@ import { renderTask } from "./tasks/index.js";
 
 const APP_VERSION = "0.1.0";
 const SAVE_KEY = "ai_pm_sim_save_v1";
+const ACTION_FEEDBACK_DURATION_MS = 12000;
+const ACTION_FEEDBACK_VISIBLE_MS = 14000;
+const MILESTONE_CUE_VISIBLE_MS = 5200;
+const XP_PER_CHOICE = 10;
+const XP_PER_TASK = 35;
+const XP_PER_EVENT = 12;
+const XP_PER_SKIPPED_TASK = 16;
+const LEVEL_PULSE_VISIBLE_MS = 3800;
+const SKIP_CARD_NAME = "直通终面卡";
+const DUEL_HINT_NAME = "面试锦囊";
+const LEVEL_TIERS = [
+  { minXp: 0, title: "简历优化中" },
+  { minXp: 55, title: "一面通话中" },
+  { minXp: 130, title: "二面深挖中" },
+  { minXp: 230, title: "三面压力测" },
+  { minXp: 350, title: "交叉面拉齐" },
+  { minXp: 500, title: "HR 面对齐" },
+  { minXp: 680, title: "背调待通过" },
+  { minXp: 890, title: "审批流转中" },
+  { minXp: 1130, title: "OC 已到账" }
+];
+
+const ACHIEVEMENT_META = {
+  first_choice: { title: "第一决策", desc: "你完成了第一条关键决策。" },
+  first_task: { title: "第一交付", desc: "你提交了第一份 PM 交付物。" },
+  chapter_1: { title: "立项完成", desc: "你完成了 Chapter 1 的关键训练。" },
+  chapter_2: { title: "洞察完成", desc: "你完成了 Chapter 2 的关键训练。" },
+  chapter_3: { title: "设计完成", desc: "你完成了 Chapter 3 的关键训练。" },
+  chapter_4: { title: "交付完成", desc: "你完成了 Chapter 4 的关键训练。" },
+  ab_analyst: { title: "实验分析师", desc: "你完成了 A/B 结果解读任务。" },
+  all_tasks_done: { title: "全流程通关", desc: "你完成了全局任务闭环。" }
+};
+
+const SKIPPABLE_TASK_TYPES = new Set(["bottleneck_hypothesis", "experience_flow", "ab_quality"]);
+const DECISION_WEIGHTS = { efficiency: 1, accuracy: 1.1, ux: 0.9, cost: -1, risk: -1.2 };
+const ACHIEVEMENT_REWARDS = {
+  first_task: { skipTaskCharges: 1, label: `奖励解锁：${SKIP_CARD_NAME} x1（可跳过 1 次低优先任务）` },
+  chapter_2: { insightLens: true, label: "奖励解锁：洞察透镜（显示隐藏线索）" },
+  ab_analyst: { duelHintCharges: 2, label: `奖励解锁：${DUEL_HINT_NAME} x2（对打模式可用）` }
+};
+
+const CHAPTER_RANDOM_EVENTS = {
+  1: [
+    {
+      id: "c1_budget_cut",
+      title: "突发：预算被临时砍 20%",
+      body: "老板要求不加人不加时长。你必须在“可交付”与“可验证”之间重新取舍。",
+      options: [
+        {
+          id: "keep_scope",
+          label: "保留原范围，压缩测试与回归",
+          note: "短期推进更快，但灰度风险明显上升。",
+          delta: { efficiency: 0.08, risk: 0.1, cost: -0.04 }
+        },
+        {
+          id: "narrow_scope",
+          label: "收缩范围，保留实验与回滚能力",
+          note: "节奏稍慢，但可验证、可兜底。",
+          delta: { efficiency: -0.03, risk: -0.08, accuracy: 0.04 }
+        }
+      ]
+    },
+    {
+      id: "c1_deadline_pullin",
+      title: "突发：灰度窗口提前 3 天",
+      body: "你需要在时间压力下重排里程碑。",
+      options: [
+        {
+          id: "rush_all",
+          label: "全功能硬上，后续再补质量",
+          note: "看起来交付完整，但返工成本高。",
+          delta: { efficiency: 0.1, risk: 0.09, cost: 0.06 }
+        },
+        {
+          id: "core_first",
+          label: "仅保留核心链路，其他放二期",
+          note: "先保闭环，减少不可控风险。",
+          delta: { efficiency: 0.04, risk: -0.06, ux: 0.03 }
+        }
+      ]
+    }
+  ],
+  2: [
+    {
+      id: "c2_competitor_launch",
+      title: "突发：竞品今天发布同类功能",
+      body: "运营要求你立刻复制竞品页面，减少流失。",
+      options: [
+        {
+          id: "copy_fast",
+          label: "快速照搬竞品方案",
+          note: "节省讨论时间，但可能偏离自身场景。",
+          delta: { efficiency: 0.06, ux: 0.03, risk: 0.06 }
+        },
+        {
+          id: "hypothesis_first",
+          label: "先验证瓶颈，再选关键点借鉴",
+          note: "多花一点时间，但更稳。",
+          delta: { efficiency: -0.02, accuracy: 0.05, risk: -0.06 }
+        }
+      ]
+    },
+    {
+      id: "c2_data_gap",
+      title: "突发：关键漏斗埋点缺失",
+      body: "你无法确认流失到底发生在上传前还是等待中。",
+      options: [
+        {
+          id: "guess_and_move",
+          label: "先凭经验改交互，埋点后补",
+          note: "动作快，但可能误判主问题。",
+          delta: { efficiency: 0.05, risk: 0.08, accuracy: -0.04 }
+        },
+        {
+          id: "patch_tracking",
+          label: "先补 2 个关键埋点再推进方案",
+          note: "节奏更慢，但能避免方向错误。",
+          delta: { efficiency: -0.03, risk: -0.07, accuracy: 0.06 }
+        }
+      ]
+    }
+  ],
+  3: [
+    {
+      id: "c3_gpu_pressure",
+      title: "突发：算力配额吃紧",
+      body: "算法建议先上重模型，但后端担心线上延迟与成本。",
+      options: [
+        {
+          id: "heavy_model",
+          label: "坚持上重模型，追求准确率",
+          note: "准确率可能提升，但延迟和成本压力加大。",
+          delta: { accuracy: 0.08, cost: 0.12, efficiency: -0.06, risk: 0.04 }
+        },
+        {
+          id: "hybrid_strategy",
+          label: "先上轻量方案 + 低置信度复核",
+          note: "先保体验与稳定，再逐步增强。",
+          delta: { accuracy: 0.04, risk: -0.06, ux: 0.06, cost: 0.03 }
+        }
+      ]
+    },
+    {
+      id: "c3_trust_public",
+      title: "突发：社区出现“AI 乱判”吐槽",
+      body: "你需要决定先优化模型，还是先补解释与申诉机制。",
+      options: [
+        {
+          id: "model_only",
+          label: "只做模型修复，不改前台表达",
+          note: "技术路径直接，但用户感知改善慢。",
+          delta: { accuracy: 0.08, ux: -0.03, risk: 0.04 }
+        },
+        {
+          id: "trust_bundle",
+          label: "模型修复 + 解释文案 + 申诉入口",
+          note: "工作量更大，但信任恢复更快。",
+          delta: { accuracy: 0.04, ux: 0.08, risk: -0.07, cost: 0.05 }
+        }
+      ]
+    }
+  ],
+  4: [
+    {
+      id: "c4_srm_alert",
+      title: "突发：SRM 报警（样本比例异常）",
+      body: "运营催你继续放量，数据同学建议先停。",
+      options: [
+        {
+          id: "ignore_srm",
+          label: "忽略 SRM，按原计划放量",
+          note: "短期结果更快，但结论可信度下降。",
+          delta: { efficiency: 0.07, risk: 0.12, accuracy: -0.05 }
+        },
+        {
+          id: "pause_fix",
+          label: "暂停放量，先排查分流与埋点",
+          note: "延迟决策，但避免错误结论。",
+          delta: { efficiency: -0.04, risk: -0.09, accuracy: 0.07 }
+        }
+      ]
+    },
+    {
+      id: "c4_exec_push",
+      title: "突发：老板要求今晚全量",
+      body: "主指标涨了，但护栏有轻微恶化。",
+      options: [
+        {
+          id: "full_release",
+          label: "直接全量，先抢窗口期",
+          note: "业务短期受益，但风险不可逆。",
+          delta: { efficiency: 0.09, risk: 0.11, ux: -0.03 }
+        },
+        {
+          id: "segment_release",
+          label: "分人群放量 + 设回滚阈值",
+          note: "稳健推进，便于控制外溢风险。",
+          delta: { efficiency: 0.02, risk: -0.08, ux: 0.05 }
+        }
+      ]
+    }
+  ]
+};
+
+const HIDDEN_INSIGHTS_BY_CHAPTER = {
+  2: "洞察透镜：过去 7 天里，超过半数流失发生在“等待超过 4 分钟”阶段。",
+  3: "洞察透镜：低置信度样本若直接出结论，会显著拉低信任与复购意愿。",
+  4: "洞察透镜：A/A 不通过时继续放量，常见后果是错误归因与返工成本飙升。"
+};
+
+const LOCAL_DUEL_QUESTIONS = [
+  {
+    question: "你做的 A/B 主指标涨了 6%，但护栏指标恶化，你会怎么决策？",
+    focus: "取舍与风险控制",
+    rubric: ["先判断显著性与业务影响", "给出分阶段放量/回滚策略", "明确后续验证动作"],
+    keywords: ["护栏", "回滚", "分阶段", "显著", "验证"]
+  },
+  {
+    question: "如果业务要求两周上线，你如何拆 MVP 范围并保证可信验证？",
+    focus: "范围管理与实验思维",
+    rubric: ["定义最小闭环", "给出北极星+护栏", "说明灰度与停线条件"],
+    keywords: ["MVP", "闭环", "灰度", "护栏", "停线"]
+  },
+  {
+    question: "面对跨部门分歧，你会如何推动技术、运营、设计达成一致？",
+    focus: "协作推进",
+    rubric: ["先统一目标口径", "再拆职责与里程碑", "最后明确风险 owner"],
+    keywords: ["目标", "口径", "里程碑", "风险", "owner"]
+  },
+  {
+    question: "线上出现大量误判投诉，你会先做哪三件事？",
+    focus: "故障应对与闭环",
+    rubric: ["先止损", "再定位原因", "最后复盘机制化"],
+    keywords: ["止损", "定位", "复盘", "申诉", "回滚"]
+  },
+  {
+    question: "请你解释一次“效率、准确率、体验、成本、风险”的平衡案例。",
+    focus: "结构化表达",
+    rubric: ["有背景与约束", "有取舍逻辑", "有数据验证与反思"],
+    keywords: ["约束", "取舍", "验证", "风险", "反思"]
+  }
+];
+
+function defaultPowerups() {
+  return { skipTaskCharges: 0, insightLens: false, duelHintCharges: 0 };
+}
+
+function defaultReplayState() {
+  return { active: false, sceneIds: [], index: 0 };
+}
+
+function defaultDuelState() {
+  return {
+    active: false,
+    loading: false,
+    error: null,
+    round: 0,
+    maxRounds: 5,
+    totalScore: 0,
+    currentQuestion: null,
+    currentFeedback: null,
+    hintText: "",
+    history: [],
+    summary: ""
+  };
+}
+
+function normalizePowerups(raw) {
+  return {
+    skipTaskCharges: Math.max(0, Number(raw?.skipTaskCharges ?? 0)),
+    insightLens: Boolean(raw?.insightLens),
+    duelHintCharges: Math.max(0, Number(raw?.duelHintCharges ?? 0))
+  };
+}
+
+function normalizeReplay(raw) {
+  return {
+    active: Boolean(raw?.active),
+    sceneIds: Array.isArray(raw?.sceneIds) ? raw.sceneIds.filter((s) => typeof s === "string") : [],
+    index: Math.max(0, Number(raw?.index ?? 0))
+  };
+}
+
+function normalizeDuel(raw) {
+  return {
+    ...defaultDuelState(),
+    ...(raw ?? {}),
+    loading: false,
+    error: null,
+    history: Array.isArray(raw?.history) ? raw.history : [],
+    round: Math.max(0, Number(raw?.round ?? 0)),
+    maxRounds: Math.max(1, Number(raw?.maxRounds ?? 5)),
+    totalScore: Math.max(0, Number(raw?.totalScore ?? 0))
+  };
+}
 
 const appEl = document.getElementById("app");
 const store = createStore({
@@ -15,24 +310,36 @@ const store = createStore({
   mode: "boot",
   locale: "zh-CN",
   contentMode: "public",
-  contentPrivateAvailable: false,
   sceneId: "start",
   chapterIndex: 0,
+  xp: 0,
+  achievements: [],
+  navStack: [],
+  powerups: defaultPowerups(),
+  mistakes: [],
+  replay: defaultReplayState(),
+  duel: defaultDuelState(),
   deliverables: {},
   history: [],
-  flags: {},
-  ui: { cardsOpen: false },
-  roleplay: { loading: false, error: null, threads: {}, health: { ok: false, checked: false, message: "" } },
+  flags: { guideDismissed: false, taskStatus: {}, chapterEvents: {} },
+  ui: { cardsOpen: false, mistakesOpen: false, actionFeedback: null, metricPulse: null, levelPulse: null, milestoneCue: null },
+  roleplay: { loading: false, error: null, threads: {}, healthChecking: false, health: { ok: false, checked: false, message: "" } },
   clockMs: 0
 });
 
 let content = null;
 let renderScheduled = false;
+let healthPollTimer = null;
+let impactTimer = null;
+let milestoneCueTimer = null;
 
 function initGlobalHooks() {
   window.render_game_to_text = () => {
     const state = store.get();
     const scene = content?.scenes?.find((s) => s.id === state.sceneId) ?? null;
+    const level = getLevelFromXp(state.xp ?? 0);
+    const levelProgress = getLevelProgress(state.xp ?? 0);
+    const chapterEventState = typeof scene?.chapter === "number" ? getChapterEventState(scene.chapter) : null;
     const payload = {
       coordinate_system: "UI-based; not a spatial game. origin: N/A, axis: N/A.",
       mode: state.mode,
@@ -41,6 +348,25 @@ function initGlobalHooks() {
       chapterIndex: state.chapterIndex,
       contentMode: state.contentMode,
       metrics: state.metrics,
+      xp: state.xp,
+      level: {
+        value: level.level,
+        title: level.title,
+        progressPct: levelProgress.pct,
+        xpToNext: levelProgress.remaining
+      },
+      powerups: normalizePowerups(state.powerups),
+      mistakeCount: Array.isArray(state.mistakes) ? state.mistakes.length : 0,
+      replay: normalizeReplay(state.replay),
+      duel: {
+        active: Boolean(state.duel?.active),
+        round: Number(state.duel?.round ?? 0),
+        maxRounds: Number(state.duel?.maxRounds ?? 5),
+        totalScore: Number(state.duel?.totalScore ?? 0)
+      },
+      chapterEventPending: Boolean(chapterEventState?.eventId && !chapterEventState?.resolved),
+      achievements: (state.achievements ?? []).map((a) => a.id),
+      canGoBack: (state.navStack?.length ?? 0) > 0,
       clickableOptionIds: (scene?.options ?? []).map((o) => o.id),
       task: scene?.task ? { type: scene.task.type, status: state.flags?.taskStatus?.[scene.id] ?? "idle" } : null,
       roleplay: scene?.roleplay ? { id: scene.roleplay.id ?? scene.id, title: scene.roleplay.title ?? "" } : null
@@ -110,19 +436,40 @@ function doLoad() {
     flashToast("存档损坏，无法读取");
     return;
   }
-  const { aiLab, roleplay, ...rest } = parsed.state ?? {};
-  const next = {
-    ...rest,
-    roleplay: roleplay ?? {
-      loading: false,
-      error: null,
-      threads: {},
-      health: store.get().roleplay?.health ?? { ok: false, checked: false, message: "" }
-    }
-  };
+  const next = parsed.state;
   const loadedScene = content?.scenes?.find((s) => s.id === next.sceneId) ?? null;
   const nextChapterIndex = typeof loadedScene?.chapter === "number" ? Math.max(0, loadedScene.chapter - 1) : next.chapterIndex ?? 0;
-  store.set({ ...next, chapterIndex: nextChapterIndex, mode: "playing" });
+  store.set({
+    ...next,
+    contentMode: "public",
+    chapterIndex: nextChapterIndex,
+    mode: "playing",
+    powerups: normalizePowerups(next?.powerups),
+    mistakes: Array.isArray(next?.mistakes) ? next.mistakes : [],
+    replay: normalizeReplay(next?.replay),
+    duel: normalizeDuel(next?.duel),
+    flags: {
+      ...(next?.flags ?? {}),
+      guideDismissed: Boolean(next?.flags?.guideDismissed),
+      taskStatus: { ...(next?.flags?.taskStatus ?? {}) },
+      chapterEvents: { ...(next?.flags?.chapterEvents ?? {}) }
+    },
+    ui: {
+      cardsOpen: Boolean(next?.ui?.cardsOpen),
+      mistakesOpen: false,
+      actionFeedback: null,
+      metricPulse: null,
+      levelPulse: null,
+      milestoneCue: null
+    },
+    roleplay: {
+      ...(next?.roleplay ?? {}),
+      loading: false,
+      error: null,
+      healthChecking: false
+    }
+  });
+  if (typeof loadedScene?.chapter === "number") ensureChapterEvent(loadedScene.chapter);
   flashToast("已读取存档");
 }
 
@@ -133,14 +480,21 @@ function resetGame({ keepContentMode }) {
     metrics: defaultMetrics(),
     mode: "playing",
     locale: "zh-CN",
-    contentMode: keepContentMode ? prev.contentMode : "public",
-    contentPrivateAvailable: prev.contentPrivateAvailable,
+    contentMode: "public",
     sceneId: "start",
     chapterIndex: 0,
+    xp: 0,
+    achievements: [],
+    navStack: [],
+    powerups: defaultPowerups(),
+    mistakes: [],
+    replay: defaultReplayState(),
+    duel: defaultDuelState(),
     deliverables: {},
     history: [],
-    flags: {},
-    roleplay: { loading: false, error: null, threads: {}, health: prev.roleplay?.health ?? { ok: false, checked: false, message: "" } },
+    flags: { guideDismissed: false, taskStatus: {}, chapterEvents: {} },
+    ui: { cardsOpen: false, mistakesOpen: false, actionFeedback: null, metricPulse: null, levelPulse: null, milestoneCue: null },
+    roleplay: { loading: false, error: null, threads: {}, healthChecking: false, health: prev.roleplay?.health ?? { ok: false, checked: false, message: "" } },
     clockMs: 0
   });
 }
@@ -149,10 +503,481 @@ function applyDelta(delta) {
   if (!delta) return;
   const state = store.get();
   const nextMetrics = { ...state.metrics };
+  const metricDelta = {};
   for (const [k, v] of Object.entries(delta)) {
-    if (typeof nextMetrics[k] === "number") nextMetrics[k] = Number(nextMetrics[k] + v);
+    if (typeof nextMetrics[k] === "number") {
+      nextMetrics[k] = Number(nextMetrics[k] + v);
+      metricDelta[k] = Number(v);
+    }
   }
-  store.set({ metrics: nextMetrics });
+  store.set({
+    metrics: nextMetrics,
+    ui: {
+      ...(state.ui ?? {}),
+      metricPulse: {
+        at: Date.now(),
+        delta: metricDelta
+      }
+    }
+  });
+}
+
+function setActionFeedback({ title, note, delta }) {
+  const state = store.get();
+  store.set({
+    ui: {
+      ...(state.ui ?? {}),
+      actionFeedback: {
+        at: Date.now(),
+        title,
+        note,
+        delta: delta ?? {}
+      }
+    }
+  });
+  clearTimeout(impactTimer);
+  impactTimer = setTimeout(() => {
+    const nowState = store.get();
+    store.set({
+      ui: {
+        ...(nowState.ui ?? {}),
+        actionFeedback: null
+      }
+    });
+  }, ACTION_FEEDBACK_DURATION_MS);
+}
+
+function setMilestoneCue({ title, subtitle, badges = [] }) {
+  const state = store.get();
+  const safeBadges = Array.isArray(badges) ? badges.filter(Boolean).slice(0, 4) : [];
+  store.set({
+    ui: {
+      ...(state.ui ?? {}),
+      milestoneCue: {
+        at: Date.now(),
+        title,
+        subtitle: subtitle ?? "",
+        badges: safeBadges
+      }
+    }
+  });
+  clearTimeout(milestoneCueTimer);
+  milestoneCueTimer = setTimeout(() => {
+    const nowState = store.get();
+    store.set({
+      ui: {
+        ...(nowState.ui ?? {}),
+        milestoneCue: null
+      }
+    });
+  }, MILESTONE_CUE_VISIBLE_MS);
+}
+
+function triggerMilestoneCue({ levelInfo, achievements, rewards }) {
+  const hasLevel = Boolean(levelInfo?.title);
+  const safeAchievements = Array.isArray(achievements) ? achievements.filter(Boolean) : [];
+  const safeRewards = Array.isArray(rewards) ? rewards.filter(Boolean) : [];
+  if (!hasLevel && !safeAchievements.length) return;
+  const title = hasLevel
+    ? `升级达成：Lv.${levelInfo.level} ${levelInfo.title}`
+    : `成就达成：${safeAchievements.map((it) => it.title).join("、")}`;
+  const subtitleParts = [];
+  if (safeAchievements.length) subtitleParts.push(`解锁成就：${safeAchievements.map((it) => `「${it.title}」`).join("、")}`);
+  if (safeRewards.length) subtitleParts.push(safeRewards.join("；"));
+  setMilestoneCue({
+    title,
+    subtitle: subtitleParts.join(" ｜ "),
+    badges: [
+      hasLevel ? `Lv.${levelInfo.level}` : "",
+      ...safeAchievements.slice(0, 3).map((it) => it.title)
+    ]
+  });
+}
+
+function getLevelFromXp(xp) {
+  const safeXp = Math.max(0, Number(xp ?? 0));
+  let index = 0;
+  for (let i = 0; i < LEVEL_TIERS.length; i += 1) {
+    if (safeXp >= LEVEL_TIERS[i].minXp) index = i;
+  }
+  const tier = LEVEL_TIERS[index] ?? LEVEL_TIERS[0];
+  return { ...tier, index, level: index + 1 };
+}
+
+function getLevelProgress(xp) {
+  const safeXp = Math.max(0, Number(xp ?? 0));
+  const current = getLevelFromXp(safeXp);
+  const nextTier = LEVEL_TIERS[current.index + 1] ?? null;
+  if (!nextTier) {
+    return { current, next: null, pct: 100, remaining: 0 };
+  }
+  const span = Math.max(1, nextTier.minXp - current.minXp);
+  const gained = Math.max(0, safeXp - current.minXp);
+  return {
+    current,
+    next: { ...nextTier, index: current.index + 1, level: current.level + 1 },
+    pct: Math.min(100, Math.round((gained / span) * 100)),
+    remaining: Math.max(0, nextTier.minXp - safeXp)
+  };
+}
+
+function grantXp(amount) {
+  const state = store.get();
+  const prevXp = Math.max(0, Number(state.xp ?? 0));
+  const gained = Math.max(0, Number(amount || 0));
+  const nextXp = prevXp + gained;
+  const prevLevel = getLevelFromXp(prevXp);
+  const nextLevel = getLevelFromXp(nextXp);
+  const leveledUp = nextLevel.level > prevLevel.level;
+  store.set({
+    xp: nextXp,
+    ui: {
+      ...(state.ui ?? {}),
+      levelPulse: leveledUp ? { at: Date.now(), from: prevLevel.level, to: nextLevel.level } : state.ui?.levelPulse ?? null
+    }
+  });
+  return { prevXp, nextXp, gained, prevLevel, nextLevel, leveledUp };
+}
+
+function unlockAchievement(id) {
+  const meta = ACHIEVEMENT_META[id];
+  if (!meta) return null;
+  const state = store.get();
+  const list = Array.isArray(state.achievements) ? state.achievements.slice() : [];
+  if (list.some((a) => a.id === id)) return null;
+  const unlocked = { id, title: meta.title, desc: meta.desc, at: Date.now() };
+  list.push(unlocked);
+  store.set({ achievements: list });
+  return unlocked;
+}
+
+function decisionScore(delta) {
+  const safe = delta ?? {};
+  let score = 0;
+  for (const [key, weight] of Object.entries(DECISION_WEIGHTS)) {
+    score += Number(safe[key] ?? 0) * weight;
+  }
+  return score;
+}
+
+function summarizeDeltaFocus(delta) {
+  const entries = Object.entries(delta ?? {}).filter(([, value]) => typeof value === "number" && Math.abs(value) > 0.0001);
+  if (!entries.length) return "未形成可观测指标变化";
+  entries.sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+  const [key, value] = entries[0];
+  if (value >= 0) return `${metricLabel(key)}提升明显`;
+  return `${metricLabel(key)}下滑明显`;
+}
+
+function isWrongDecision(delta) {
+  return decisionScore(delta) < -0.01;
+}
+
+function pushMistake(entry) {
+  const state = store.get();
+  const list = Array.isArray(state.mistakes) ? state.mistakes.slice() : [];
+  const key = `${entry.kind}:${entry.sceneId}:${entry.refId ?? ""}`;
+  const idx = list.findIndex((it) => it.key === key);
+  if (idx >= 0) {
+    list[idx] = { ...list[idx], count: Number(list[idx].count ?? 1) + 1, lastAt: Date.now(), reason: entry.reason };
+  } else {
+    list.unshift({ key, count: 1, lastAt: Date.now(), ...entry });
+  }
+  if (list.length > 60) list.length = 60;
+  store.set({ mistakes: list });
+}
+
+function maybeRecordWrongChoice(scene, option) {
+  if (!isWrongDecision(option?.delta)) return false;
+  pushMistake({
+    kind: "choice",
+    sceneId: scene?.id ?? "",
+    refId: option?.id ?? "",
+    title: option?.label ?? "剧情决策",
+    reason: `${summarizeDeltaFocus(option?.delta)}；建议优先压低风险/成本再追求提效。`
+  });
+  return true;
+}
+
+function maybeRecordWrongTask(scene, result) {
+  if (!isWrongDecision(result?.delta)) return false;
+  pushMistake({
+    kind: "task",
+    sceneId: scene?.id ?? "",
+    refId: scene?.task?.type ?? "",
+    title: result?.deliverable?.title ?? scene?.title ?? "任务交付",
+    reason: `${summarizeDeltaFocus(result?.delta)}；下次先检查主指标与护栏是否同时满足。`
+  });
+  return true;
+}
+
+function maybeRecordWrongEvent(sceneId, eventTitle, eventOption) {
+  if (!isWrongDecision(eventOption?.delta)) return false;
+  pushMistake({
+    kind: "event",
+    sceneId,
+    refId: eventOption?.id ?? "",
+    title: `${eventTitle} - ${eventOption?.label ?? "事件决策"}`,
+    reason: `${summarizeDeltaFocus(eventOption?.delta)}；突发情境优先保验证与回滚能力。`
+  });
+  return true;
+}
+
+function getMistakeReplayScenes() {
+  const mistakes = Array.isArray(store.get().mistakes) ? store.get().mistakes : [];
+  const validSceneIds = new Set((content?.scenes ?? []).map((s) => s.id));
+  const ids = [];
+  const seen = new Set();
+  for (const item of mistakes) {
+    if (!item?.sceneId || seen.has(item.sceneId) || !validSceneIds.has(item.sceneId)) continue;
+    seen.add(item.sceneId);
+    ids.push(item.sceneId);
+  }
+  return ids;
+}
+
+function startMistakeReplay() {
+  const sceneIds = getMistakeReplayScenes();
+  if (!sceneIds.length) {
+    flashToast("错题本为空，继续保持");
+    return;
+  }
+  store.set({ replay: { active: true, sceneIds, index: 0 } });
+  goToScene(sceneIds[0]);
+  flashToast(`已进入错题重打：1/${sceneIds.length}`);
+}
+
+function goNextReplayScene() {
+  const replay = normalizeReplay(store.get().replay);
+  if (!replay.active || !replay.sceneIds.length) {
+    flashToast("当前不在错题重打模式");
+    return;
+  }
+  const nextIndex = replay.index + 1;
+  if (nextIndex >= replay.sceneIds.length) {
+    store.set({ replay: defaultReplayState() });
+    flashToast("错题重打已完成");
+    return;
+  }
+  const nextSceneId = replay.sceneIds[nextIndex];
+  store.set({ replay: { ...replay, index: nextIndex } });
+  goToScene(nextSceneId);
+  flashToast(`已切换到下一题：${nextIndex + 1}/${replay.sceneIds.length}`);
+}
+
+function getChapterEventState(chapter) {
+  return store.get().flags?.chapterEvents?.[chapter] ?? null;
+}
+
+function getChapterEventById(chapter, eventId) {
+  return (CHAPTER_RANDOM_EVENTS[chapter] ?? []).find((it) => it.id === eventId) ?? null;
+}
+
+function ensureChapterEvent(chapter) {
+  if (typeof chapter !== "number") return;
+  const candidates = CHAPTER_RANDOM_EVENTS[chapter] ?? [];
+  if (!candidates.length) return;
+  const state = store.get();
+  const chapterEvents = { ...(state.flags?.chapterEvents ?? {}) };
+  if (chapterEvents[chapter]?.eventId) return;
+  const pick = candidates[Math.floor(Math.random() * candidates.length)];
+  chapterEvents[chapter] = { eventId: pick.id, resolved: false, chosenId: null };
+  store.set({ flags: { ...(state.flags ?? {}), chapterEvents } });
+}
+
+function renderChapterEvent(scene) {
+  if (typeof scene?.chapter !== "number") return "";
+  const chapterEventState = getChapterEventState(scene.chapter);
+  if (!chapterEventState?.eventId || chapterEventState?.resolved) return "";
+  const event = getChapterEventById(scene.chapter, chapterEventState.eventId);
+  if (!event) return "";
+  return `
+    <div class="event-panel">
+      <div class="event-title">突发事件：${escapeHtml(event.title)}</div>
+      <div class="event-body">${formatBody(event.body ?? "")}</div>
+      <div class="event-choices">
+        ${(event.options ?? [])
+          .map(
+            (option) => `
+              <button class="choice" data-event-choice="${option.id}" data-event-id="${event.id}" data-event-chapter="${scene.chapter}">
+                <div class="t">${escapeHtml(option.label)}</div>
+                <div class="s">${escapeHtml(option.note ?? "")}</div>
+              </button>
+            `
+          )
+          .join("")}
+      </div>
+    </div>
+  `;
+}
+
+function applyAchievementRewards(unlockedList) {
+  const rewards = [];
+  if (!Array.isArray(unlockedList) || !unlockedList.length) return rewards;
+  const state = store.get();
+  const powerups = normalizePowerups(state.powerups);
+  let changed = false;
+  for (const achievement of unlockedList) {
+    const reward = ACHIEVEMENT_REWARDS[achievement?.id];
+    if (!reward) continue;
+    if (typeof reward.skipTaskCharges === "number") {
+      powerups.skipTaskCharges += reward.skipTaskCharges;
+      changed = true;
+    }
+    if (typeof reward.duelHintCharges === "number") {
+      powerups.duelHintCharges += reward.duelHintCharges;
+      changed = true;
+    }
+    if (reward.insightLens && !powerups.insightLens) {
+      powerups.insightLens = true;
+      changed = true;
+    }
+    rewards.push(reward.label);
+  }
+  if (changed) store.set({ powerups });
+  return rewards;
+}
+
+function canSkipCurrentTask(scene) {
+  if (!scene?.task) return false;
+  const powerups = normalizePowerups(store.get().powerups);
+  const taskStatus = store.get().flags?.taskStatus?.[scene.id] ?? "idle";
+  return powerups.skipTaskCharges > 0 && taskStatus !== "completed" && SKIPPABLE_TASK_TYPES.has(scene.task.type);
+}
+
+function consumeSkipTaskCharge() {
+  const state = store.get();
+  const powerups = normalizePowerups(state.powerups);
+  if (powerups.skipTaskCharges <= 0) return false;
+  powerups.skipTaskCharges -= 1;
+  store.set({ powerups });
+  return true;
+}
+
+function buildSkippedTaskResult(scene) {
+  return {
+    deliverable: {
+      type: scene?.task?.type ?? "task",
+      title: `${scene?.title ?? "任务"}（${SKIP_CARD_NAME}提交）`,
+      brief: `使用${SKIP_CARD_NAME}提交了保守版本，建议后续补齐完整论证。`,
+      data: { skippedByPowerup: true }
+    },
+    delta: { efficiency: 0.03, accuracy: 0.02, risk: 0.01, cost: -0.01, ux: 0 },
+    xpAward: XP_PER_SKIPPED_TASK,
+    feedbackTag: SKIP_CARD_NAME
+  };
+}
+
+function getTaskSceneIds() {
+  return (content?.scenes ?? []).filter((s) => s.task).map((s) => s.id);
+}
+
+function getTaskProgressFromState(state) {
+  const ids = getTaskSceneIds();
+  const taskStatus = state.flags?.taskStatus ?? {};
+  const completed = ids.filter((id) => taskStatus[id] === "completed").length;
+  return { total: ids.length, completed };
+}
+
+function getChapterTaskProgress(state, chapter) {
+  const chapterIds = (content?.scenes ?? []).filter((s) => s.task && s.chapter === chapter).map((s) => s.id);
+  const taskStatus = state.flags?.taskStatus ?? {};
+  const completed = chapterIds.filter((id) => taskStatus[id] === "completed").length;
+  return { total: chapterIds.length, completed };
+}
+
+function unlockChapterAchievementIfComplete(chapter) {
+  if (typeof chapter !== "number") return null;
+  const progress = getChapterTaskProgress(store.get(), chapter);
+  if (progress.total > 0 && progress.completed >= progress.total) {
+    return unlockAchievement(`chapter_${chapter}`);
+  }
+  return null;
+}
+
+function snapshotStateForBack(state) {
+  const { navStack, ...rest } = state;
+  const snapshot = {
+    ...rest,
+    ui: {
+      cardsOpen: false,
+      mistakesOpen: false,
+      actionFeedback: null,
+      metricPulse: null,
+      levelPulse: null,
+      milestoneCue: null
+    },
+    roleplay: {
+      ...(state.roleplay ?? {}),
+      loading: false,
+      error: null,
+      healthChecking: false
+    },
+    duel: {
+      ...(state.duel ?? defaultDuelState()),
+      loading: false,
+      error: null
+    }
+  };
+  return JSON.parse(JSON.stringify(snapshot));
+}
+
+function pushNavSnapshot() {
+  const state = store.get();
+  const stack = Array.isArray(state.navStack) ? state.navStack.slice() : [];
+  stack.push(snapshotStateForBack(state));
+  if (stack.length > 50) stack.shift();
+  store.set({ navStack: stack });
+}
+
+function canGoBack() {
+  return (store.get().navStack?.length ?? 0) > 0;
+}
+
+function persistStateSilently() {
+  const state = store.get();
+  const payload = JSON.stringify({
+    savedAt: Date.now(),
+    appVersion: APP_VERSION,
+    state
+  });
+  storage.setItem(SAVE_KEY, payload);
+}
+
+function goBackOneStep() {
+  const state = store.get();
+  const stack = Array.isArray(state.navStack) ? state.navStack.slice() : [];
+  if (!stack.length) {
+    flashToast("当前没有可返回的上一步");
+    return;
+  }
+  const previous = stack.pop();
+  store.set({
+    ...previous,
+    mode: "playing",
+    navStack: stack,
+    ui: {
+      cardsOpen: false,
+      mistakesOpen: false,
+      actionFeedback: null,
+      metricPulse: null,
+      levelPulse: null,
+      milestoneCue: null
+    },
+    roleplay: {
+      ...(previous.roleplay ?? {}),
+      loading: false,
+      error: null,
+      healthChecking: false
+    },
+    duel: {
+      ...(previous.duel ?? defaultDuelState()),
+      loading: false,
+      error: null
+    }
+  });
+  persistStateSilently();
+  flashToast("已返回上一步");
 }
 
 function setTaskStatus(sceneId, status) {
@@ -173,30 +998,80 @@ function recordHistory(entry) {
 function goToScene(sceneId) {
   const nextScene = content?.scenes?.find((s) => s.id === sceneId) ?? null;
   const nextChapterIndex = typeof nextScene?.chapter === "number" ? Math.max(0, nextScene.chapter - 1) : store.get().chapterIndex;
+  if (typeof nextScene?.chapter === "number") ensureChapterEvent(nextScene.chapter);
   store.set({ sceneId, chapterIndex: nextChapterIndex, mode: "playing" });
 }
 
 function completeTask(scene, result) {
+  pushNavSnapshot();
   setTaskStatus(scene.id, "completed");
   const state = store.get();
   const deliverables = { ...state.deliverables };
   deliverables[scene.id] = result.deliverable;
   store.set({ deliverables });
   if (result?.delta) applyDelta(result.delta);
+  const xpAward = Math.max(0, Number(result?.xpAward ?? XP_PER_TASK));
+  const xpResult = grantXp(xpAward);
+  const unlocked = [];
+  const firstTaskAchievement = unlockAchievement("first_task");
+  if (firstTaskAchievement) unlocked.push(firstTaskAchievement);
+  const chapterAchievement = unlockChapterAchievementIfComplete(scene.chapter);
+  if (chapterAchievement) unlocked.push(chapterAchievement);
+  const abAchievement = scene.id === "c4_task_abreadout" ? unlockAchievement("ab_analyst") : null;
+  if (abAchievement) unlocked.push(abAchievement);
+  const totalProgress = getTaskProgressFromState(store.get());
+  const finalAchievement = totalProgress.total > 0 && totalProgress.completed >= totalProgress.total ? unlockAchievement("all_tasks_done") : null;
+  if (finalAchievement) unlocked.push(finalAchievement);
+  const rewardLabels = applyAchievementRewards(unlocked);
+  const levelUpTitle = xpResult.leveledUp ? `｜升阶 Lv.${xpResult.nextLevel.level} ${xpResult.nextLevel.title}` : "";
+  const wrongRecorded = maybeRecordWrongTask(scene, result);
+  const achievementText = unlocked.length ? ` 已解锁成就：${unlocked.map((it) => `「${it.title}」`).join("、")}。` : "";
+  const rewardText = rewardLabels.length ? ` ${rewardLabels.join("；")}。` : "";
+  const levelUpNote = xpResult.leveledUp ? ` 你已进入 Lv.${xpResult.nextLevel.level} ${xpResult.nextLevel.title}。` : "";
+  const wrongText = wrongRecorded ? " 本次已记录到错题本，建议复盘后重打。" : "";
+  const actionPrefix = result?.feedbackTag ? `${result.feedbackTag}生效：` : "";
+  setActionFeedback({
+    title: `${actionPrefix}面试进度更新：完成交付「${result?.deliverable?.title ?? "任务交付"}」（+${xpAward} XP）${levelUpTitle}`,
+    note: `${result?.deliverable?.brief ?? "本次交付已写入你的作品集摘要。"}${achievementText}${rewardText}${levelUpNote}${wrongText}`,
+    delta: result?.delta
+  });
+  triggerMilestoneCue({
+    levelInfo: xpResult.leveledUp ? xpResult.nextLevel : null,
+    achievements: unlocked,
+    rewards: rewardLabels
+  });
   recordHistory({ kind: "task", sceneId: scene.id, deliverable: result.deliverable, delta: result.delta });
   if (scene.task?.onCompleteNext) goToScene(scene.task.onCompleteNext);
   doSave();
 }
 
 function onChoose(scene, option) {
+  pushNavSnapshot();
   applyDelta(option.delta);
+  const xpResult = grantXp(XP_PER_CHOICE);
+  const unlocked = [];
+  const firstChoiceAchievement = unlockAchievement("first_choice");
+  if (firstChoiceAchievement) unlocked.push(firstChoiceAchievement);
+  const rewardLabels = applyAchievementRewards(unlocked);
+  const levelUpTitle = xpResult.leveledUp ? `｜升阶 Lv.${xpResult.nextLevel.level} ${xpResult.nextLevel.title}` : "";
+  const levelUpNote = xpResult.leveledUp ? ` 你已进入 Lv.${xpResult.nextLevel.level} ${xpResult.nextLevel.title}。` : "";
+  const wrongRecorded = maybeRecordWrongChoice(scene, option);
+  const achievementText = unlocked.length ? ` 已解锁成就：${unlocked.map((it) => `「${it.title}」`).join("、")}。` : "";
+  const rewardText = rewardLabels.length ? ` ${rewardLabels.join("；")}。` : "";
+  const wrongText = wrongRecorded ? " 这次选择已加入错题本，可在顶栏进入复盘重打。" : "";
+  setActionFeedback({
+    title: `面试进度更新：你给出决策「${option.label}」（+${XP_PER_CHOICE} XP）${levelUpTitle}`,
+    note: `${option.subtitle ?? option.note ?? "该决策已对训练指标产生影响。"}${achievementText}${rewardText}${levelUpNote}${wrongText}`,
+    delta: option.delta
+  });
+  triggerMilestoneCue({
+    levelInfo: xpResult.leveledUp ? xpResult.nextLevel : null,
+    achievements: unlocked,
+    rewards: rewardLabels
+  });
   recordHistory({ kind: "choice", sceneId: scene.id, optionId: option.id, delta: option.delta, note: option.note ?? "" });
   if (option.next) goToScene(option.next);
   doSave();
-}
-
-function hasPrivateContent() {
-  return store.get().contentPrivateAvailable;
 }
 
 function getScene() {
@@ -207,23 +1082,38 @@ function getScene() {
 function renderMetricsPanel() {
   const state = store.get();
   const keys = Object.keys(state.metrics);
+  const pulse = state.ui?.metricPulse ?? null;
+  const pulseActive = pulse?.at && Date.now() - pulse.at < 2800;
+  const feedback = state.ui?.actionFeedback;
+  const showFeedbackHint = Boolean(feedback?.at && Date.now() - feedback.at < ACTION_FEEDBACK_VISIBLE_MS);
   return `
-    <div class="panel">
+    <div class="panel metrics-panel">
       <div class="hd">
         <h2>指标面板</h2>
         <span class="pill">范围: -2.00 ~ +2.00</span>
       </div>
       <div class="bd">
+        ${
+          showFeedbackHint
+            ? `<div class="impact-mini">${escapeHtml(feedback.title ?? "决策反馈")}：指标已更新</div>`
+            : ""
+        }
         <div class="metrics">
           ${keys
             .map((k) => {
               const v = state.metrics[k];
               const p = Math.round(percentFromMetricValue(v) * 100);
+              const d = pulseActive ? pulse?.delta?.[k] : undefined;
+              const hasDelta = typeof d === "number" && Math.abs(d) > 0.0001;
+              const deltaClass = hasDelta ? (d > 0 ? "metric-up" : "metric-down") : "";
               return `
-                <div class="metric">
+                <div class="metric ${deltaClass}">
                   <div class="row">
                     <div class="name">${metricLabel(k)}</div>
-                    <div class="val">${fmtMetric(v)} (${p}%)</div>
+                    <div class="val">
+                      ${fmtMetric(v)} (${p}%)
+                      ${hasDelta ? `<span class="metric-delta ${d > 0 ? "up" : "down"}">${fmtMetric(d)}</span>` : ""}
+                    </div>
                   </div>
                   <div class="bar"><i style="width:${p}%"></i></div>
                 </div>
@@ -241,13 +1131,41 @@ function renderMetricsPanel() {
 
 function renderStart(scene) {
   const state = store.get();
+  const level = getLevelFromXp(state.xp ?? 0);
+  const achievements = Array.isArray(state.achievements) ? state.achievements.length : 0;
+  const showGuideOverlay = !state.flags?.guideDismissed;
   return `
     <div class="panel">
       <div class="hd"><h2>开始</h2><span class="pill">MVP</span></div>
       <div class="bd">
+        ${
+          showGuideOverlay
+            ? `
+              <div class="guide-overlay">
+                <div class="guide-card">
+                  <div class="guide-title">开局任务卡</div>
+                  <div class="guide-row"><span>你的身份</span><b>AI 产品经理（模拟训练）</b></div>
+                  <div class="guide-row"><span>核心目标</span><b>完成 4 章 13 任务，建立 PM 闭环能力</b></div>
+                  <div class="guide-row"><span>操作方式</span><b>每个场景做选择或提交任务，观察指标与反馈</b></div>
+                  <div class="guide-row"><span>收益产出</span><b>结算页得到可复制作品集摘要</b></div>
+                  <div class="guide-actions">
+                    <button id="guide-start-btn" class="btn-primary">我知道了，开始训练</button>
+                  </div>
+                </div>
+              </div>
+            `
+            : ""
+        }
         <div class="scene">
           <h3>${scene.title}</h3>
           <div class="body">${formatBody(scene.body)}</div>
+          <div class="mission-panel" style="margin-top:12px">
+            <div class="mission-title">新手引导：先看这 4 条</div>
+            <div class="mission-row"><span>你要做什么</span><b>完成 4 章训练，走完 PM 全流程闭环</b></div>
+            <div class="mission-row"><span>怎么玩</span><b>读场景 -> 做选择 -> 完成任务交付 -> 看反馈</b></div>
+            <div class="mission-row"><span>通关目标</span><b>完成全部任务并生成可复制作品集摘要</b></div>
+            <div class="mission-row"><span>激励</span><b>Lv.${level.level} ${level.title}（${state.xp ?? 0} XP / ${achievements} 成就）</b></div>
+          </div>
           <div class="choices">
             <button id="start-btn" class="btn-primary" style="padding:12px 14px">开始一局（30–45 分钟）</button>
             <button id="load-btn">读取本地存档</button>
@@ -256,32 +1174,19 @@ function renderStart(scene) {
           <div class="inline-note">
             推荐玩法: 先按提示完成每章 1 个任务，再看结算页生成的“作品集摘要”。
           </div>
-          <div class="inline-note">
-            公开版默认可离线游玩，AI 功能是可选增强，不影响完整通关与学习路径。
-          </div>
         </div>
         <div class="task" style="margin-top:16px">
           <div class="grid-2">
             <div class="card">
-              <div class="k">内容版本</div>
+              <div class="k">玩法提醒</div>
               <div class="v">
-                <div class="row" style="margin-top:8px">
-                  <select id="content-mode">
-                    <option value="public" ${state.contentMode === "public" ? "selected" : ""}>Public（默认虚构化）</option>
-                    <option value="private" ${state.contentMode === "private" ? "selected" : ""} ${hasPrivateContent() ? "" : "disabled"}>Private（本地真名版）</option>
-                  </select>
-                </div>
-                ${
-                  hasPrivateContent()
-                    ? `<div class="inline-note" style="margin-top:10px">检测到本地 private 内容文件，可切换。</div>`
-                    : `<div class="inline-note" style="margin-top:10px">未检测到 private 内容文件。若需要真名版，请按 README 创建它们（默认已 gitignore）。</div>`
-                }
+                <div class="inline-note" style="margin-top:8px">建议按顺序完成任务，观察每次决策带来的指标变化与反馈。</div>
               </div>
             </div>
             <div class="card">
               <div class="k">说明</div>
               <div class="v">
-                这是“AI 产品经理实习”教育模拟游戏。所有指标、流程与数值为训练用途的抽象，不代表任何真实公司内部信息或真实业务表现。
+                这是“AI 产品经理实习”教育模拟游戏。你会通过决策、任务交付和复盘来训练产品经理核心能力。
               </div>
             </div>
           </div>
@@ -301,12 +1206,105 @@ function renderAbout() {
           <div class="body">
             <p>你会在 4 章里完成一次完整的 PM 闭环: 立项→洞察→设计→交付→复盘。</p>
             <p>每章会产出一个“小交付物”，并把你的决策映射到 5 个指标（效率、准确性、体验、成本、风险），给到可解释反馈。</p>
-            <p>Public 版本默认虚构化，不包含真实公司名、内部指标、内部系统名等敏感信息；Private 版本仅供本地使用，且默认已被 gitignore 防止误提交。</p>
           </div>
           <div class="choices">
             <button id="back-btn">返回</button>
           </div>
         </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderMistakeSummaryCard() {
+  const mistakes = Array.isArray(store.get().mistakes) ? store.get().mistakes : [];
+  const top = mistakes.slice(0, 3);
+  return `
+    <div class="card" style="margin-top:10px">
+      <div class="k">错题本与复盘重打</div>
+      <div class="v">
+        <div>当前记录：${mistakes.length} 条</div>
+        ${
+          top.length
+            ? `<ul style="margin:8px 0 0; padding-left:18px">${top.map((it) => `<li>${escapeHtml(it.title ?? "决策")}（${escapeHtml(it.reason ?? "建议复盘")}）</li>`).join("")}</ul>`
+            : `<div class="inline-note" style="margin-top:8px">暂时没有错题记录，继续保持。</div>`
+        }
+        <div class="row" style="margin-top:10px">
+          <button id="mistake-replay-btn" ${mistakes.length ? "class='btn-primary'" : "disabled"}>重打错题</button>
+          <button id="mistake-open-end-btn">查看错题本</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderDuelPanel() {
+  const state = store.get();
+  const duel = normalizeDuel(state.duel);
+  const aiAvailable = Boolean(state.roleplay?.health?.ok);
+  const hints = normalizePowerups(state.powerups).duelHintCharges;
+  const progress = duel.maxRounds ? Math.round((duel.round / duel.maxRounds) * 100) : 0;
+  if (!duel.active) {
+    return `
+      <div class="card" style="margin-top:10px">
+        <div class="k">面试官对打模式（5 轮）</div>
+        <div class="v">
+          <div>模拟真实 PM 面试追问。AI 可用时由模型动态出题与打分，离线时使用脚本题库。</div>
+          <div class="inline-note" style="margin-top:8px">${aiAvailable ? "当前 AI 在线：将使用实时追问。" : "当前 AI 离线：将使用本地追问脚本。"}</div>
+          <div class="row" style="margin-top:10px">
+            <button id="duel-start-btn" class="btn-primary">开始对打</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+  const current = duel.currentQuestion;
+  const feedback = duel.currentFeedback;
+  const isReviewStep = Boolean(feedback);
+  return `
+    <div class="card duel-card" style="margin-top:10px">
+      <div class="k">面试官对打模式（第 ${duel.round}/${duel.maxRounds} 轮）</div>
+      <div class="v">
+        <div class="mission-progress level" style="margin-top:8px"><i style="width:${progress}%"></i></div>
+        <div style="margin-top:8px">累计得分：<b>${duel.totalScore}</b> / ${duel.maxRounds * 5}</div>
+        ${
+          current
+            ? `
+              <div class="event-panel" style="margin-top:10px">
+                <div class="event-title">题目</div>
+                <div class="event-body">${escapeHtml(current.question ?? "")}</div>
+                <div class="inline-note" style="margin-top:8px">考察点：${escapeHtml(current.focus ?? "结构化表达")}</div>
+                ${
+                  Array.isArray(current.rubric) && current.rubric.length
+                    ? `<div class="inline-note" style="margin-top:8px">评分要点：${current.rubric.map(escapeHtml).join("；")}</div>`
+                    : ""
+                }
+              </div>
+            `
+            : `<div class="inline-note" style="margin-top:8px">正在准备题目...</div>`
+        }
+        ${isReviewStep ? `<div class="duel-score">本轮评分：${feedback.score}/5｜${escapeHtml(feedback.verdict ?? "")}</div>` : ""}
+        ${isReviewStep ? `<div class="inline-note" style="margin-top:8px">亮点：${escapeHtml(feedback.strength ?? "暂无")}；缺口：${escapeHtml(feedback.miss ?? "暂无")}</div>` : ""}
+        ${isReviewStep ? `<div class="inline-note" style="margin-top:8px">建议：${escapeHtml(feedback.next ?? "继续保持结构化表达。")}</div>` : ""}
+        ${duel.hintText ? `<div class="inline-note" style="margin-top:8px">${escapeHtml(duel.hintText)}</div>` : ""}
+        <textarea id="duel-answer-input" ${isReviewStep ? "disabled" : ""} placeholder="用结构化方式回答：背景/取舍/验证/风险与下一步"></textarea>
+        ${duel.error ? `<div class="error" style="margin-top:8px">${escapeHtml(duel.error)}</div>` : ""}
+        <div class="row" style="margin-top:10px">
+          ${
+            !isReviewStep
+              ? `<button id="duel-submit-btn" class="btn-primary" ${duel.loading ? "disabled" : ""}>提交回答</button>`
+              : duel.round < duel.maxRounds
+                ? `<button id="duel-next-btn" class="btn-primary" ${duel.loading ? "disabled" : ""}>下一问</button>`
+                : `<button id="duel-finish-btn" class="btn-primary" ${duel.loading ? "disabled" : ""}>生成面试总结</button>`
+          }
+          <button id="duel-hint-btn" ${hints > 0 && !isReviewStep ? "" : "disabled"}>使用${DUEL_HINT_NAME}（剩余 ${hints}）</button>
+          <button id="duel-stop-btn" ${duel.loading ? "disabled" : ""}>退出对打</button>
+        </div>
+        ${
+          duel.summary
+            ? `<div class="card" style="margin-top:10px"><div class="k">对打总结</div><div class="v">${formatBody(duel.summary)}</div></div>`
+            : ""
+        }
       </div>
     </div>
   `;
@@ -349,6 +1347,8 @@ function renderEnd(scene) {
                 </div>
               </div>
             </div>
+            ${renderMistakeSummaryCard()}
+            ${renderDuelPanel()}
           </div>
           <div class="choices">
             <button id="restart-btn" class="btn-primary">再来一局</button>
@@ -366,6 +1366,12 @@ function renderScene(scene) {
   const chapter = scene.chapter ? `<span class="pill">Chapter ${scene.chapter}</span>` : "";
   const taskStatus = state.flags?.taskStatus?.[scene.id] ?? "idle";
   const noteHtml = scene.note ? `<div class="inline-note">${scene.note}</div>` : "";
+  const eventHtml = renderChapterEvent(scene);
+  const insightText = scene?.chapter ? HIDDEN_INSIGHTS_BY_CHAPTER[scene.chapter] : "";
+  const insightHtml =
+    insightText && normalizePowerups(state.powerups).insightLens
+      ? `<div class="insight-panel">洞察透镜：${escapeHtml(insightText)}</div>`
+      : "";
 
   const optionsHtml = (scene.options ?? [])
     .map((o) => {
@@ -386,7 +1392,10 @@ function renderScene(scene) {
             <div class="pill">任务</div>
             <div style="margin-top:8px; color: rgba(255,255,255,0.88); font-size:14px; line-height:1.6">${scene.task.prompt}</div>
           </div>
-          <div class="pill" id="task-status">状态: ${taskStatus}</div>
+          <div style="display:flex; gap:8px; align-items:center; justify-content:flex-end">
+            <div class="pill" id="task-status">状态: ${taskStatus}</div>
+            ${canSkipCurrentTask(scene) ? `<button id="skip-task-btn">使用${SKIP_CARD_NAME}</button>` : ""}
+          </div>
         </div>
         <div id="task-ui" style="margin-top:12px"></div>
       </div>
@@ -410,6 +1419,9 @@ function renderScene(scene) {
             <span class="pill">章节进度: ${Math.max(0, state.chapterIndex + 1)}/4</span>
             <span class="pill">内容: ${state.contentMode}</span>
           </div>
+          ${renderMissionPanel(scene)}
+          ${eventHtml}
+          ${insightHtml}
           <div class="body">${formatBody(scene.body)}</div>
           ${noteHtml}
           ${extra}
@@ -428,23 +1440,136 @@ function renderRightPanel() {
   if (scene.id === "about") return renderAbout();
   if (scene.id === "end") return renderEnd(scene);
   const roleplayPanel = scene.roleplay ? renderRoleplay(scene) : "";
+  const actionFeedbackPanel = renderActionFeedback();
   return `
     <div style="display:grid; gap:14px">
+      ${actionFeedbackPanel}
       ${renderScene(scene)}
       ${roleplayPanel}
     </div>
   `;
 }
 
+function renderActionFeedback() {
+  const feedback = store.get().ui?.actionFeedback;
+  if (!feedback?.at || Date.now() - feedback.at > ACTION_FEEDBACK_VISIBLE_MS) return "";
+  const levelUp = /升阶/.test(String(feedback.title ?? ""));
+  const deltaEntries = Object.entries(feedback.delta ?? {}).filter(([, value]) => typeof value === "number" && Math.abs(value) > 0.0001);
+  const deltaText = deltaEntries.length
+    ? deltaEntries.map(([key, value]) => `${metricLabel(key)} ${fmtMetric(value)}`).join(" ｜ ")
+    : "本次操作不改变指标";
+  return `
+    <div class="impact-banner ${levelUp ? "level-up" : ""}">
+      <div class="title">${escapeHtml(feedback.title ?? "决策已生效")}</div>
+      <div class="delta">${escapeHtml(deltaText)}</div>
+      ${feedback.note ? `<div class="note">${escapeHtml(feedback.note)}</div>` : ""}
+    </div>
+  `;
+}
+
+function renderMilestoneCue() {
+  const cue = store.get().ui?.milestoneCue;
+  if (!cue?.title) return "";
+  const isActive = cue?.at ? Date.now() - cue.at < MILESTONE_CUE_VISIBLE_MS + 500 : true;
+  if (!isActive) return "";
+  return `
+    <div class="milestone-cue-wrap">
+      <div class="milestone-cue">
+        <div class="title">${escapeHtml(cue.title)}</div>
+        ${cue.subtitle ? `<div class="subtitle">${escapeHtml(cue.subtitle)}</div>` : ""}
+        ${
+          Array.isArray(cue.badges) && cue.badges.length
+            ? `<div class="badges">${cue.badges.map((it) => `<span class="pill">${escapeHtml(it)}</span>`).join("")}</div>`
+            : ""
+        }
+      </div>
+    </div>
+  `;
+}
+
+function chapterGoalText(chapter) {
+  const map = {
+    1: "定义目标边界与埋点口径，避免一开始就跑偏。",
+    2: "找到真实瓶颈并产出可执行的竞品差异结论。",
+    3: "平衡体验与 AI 方案取舍，补齐 bad case 兜底。",
+    4: "完成 A/B 全流程、灰度闭环和迭代决策。"
+  };
+  return map[chapter] ?? "完成当前场景，持续推进项目闭环。";
+}
+
+function renderMissionPanel(scene) {
+  const state = store.get();
+  const levelProgress = getLevelProgress(state.xp ?? 0);
+  const powerups = normalizePowerups(state.powerups);
+  const replay = normalizeReplay(state.replay);
+  const taskProgress = getTaskProgressFromState(state);
+  const chapterProgress = getChapterTaskProgress(state, scene.chapter);
+  const allPct = taskProgress.total ? Math.round((taskProgress.completed / taskProgress.total) * 100) : 0;
+  const chapterPct = chapterProgress.total ? Math.round((chapterProgress.completed / chapterProgress.total) * 100) : 0;
+  const currentAction = scene.task
+    ? `完成当前任务交付（奖励 +${XP_PER_TASK} XP）`
+    : scene.options?.length
+      ? `做出关键决策推进剧情（奖励 +${XP_PER_CHOICE} XP）`
+      : "阅读反馈并进入下一步";
+  const levelLabel = levelProgress.next
+    ? `Lv.${levelProgress.current.level} ${levelProgress.current.title}（距 Lv.${levelProgress.next.level} 还差 ${levelProgress.remaining} XP）`
+    : `Lv.${levelProgress.current.level} ${levelProgress.current.title}（已满级）`;
+  const powerupLabel = `${SKIP_CARD_NAME} ${powerups.skipTaskCharges}｜${DUEL_HINT_NAME} ${powerups.duelHintCharges}${powerups.insightLens ? "｜洞察透镜已启用" : ""}`;
+  const replayLabel = replay.active ? `错题重打中 ${Math.min(replay.index + 1, replay.sceneIds.length)}/${replay.sceneIds.length}` : "未开启";
+  return `
+    <div class="mission-panel">
+      <div class="mission-title">当前目标与玩法指引</div>
+      <div class="mission-row"><span>本章目标</span><b>${chapterGoalText(scene.chapter)}</b></div>
+      <div class="mission-row"><span>当前动作</span><b>${currentAction}</b></div>
+      <div class="mission-row"><span>当前段位</span><b>${levelLabel}</b></div>
+      <div class="mission-row"><span>能力道具</span><b>${powerupLabel}</b></div>
+      <div class="mission-row"><span>复盘模式</span><b>${replayLabel}</b></div>
+      <div class="mission-row"><span>章节完成度</span><b>${chapterProgress.completed}/${chapterProgress.total} (${chapterPct}%)</b></div>
+      <div class="mission-row"><span>全局通关进度</span><b>${taskProgress.completed}/${taskProgress.total} (${allPct}%)</b></div>
+      <div class="mission-progress level"><i style="width:${levelProgress.pct}%"></i></div>
+      <div class="mission-progress"><i style="width:${allPct}%"></i></div>
+    </div>
+  `;
+}
+
 function renderTopbar() {
   const state = store.get();
+  const levelProgress = getLevelProgress(state.xp ?? 0);
+  const levelPulse = state.ui?.levelPulse ?? null;
+  const levelPulseActive = Boolean(levelPulse?.at && Date.now() - levelPulse.at < LEVEL_PULSE_VISIBLE_MS);
+  const achievementCount = Array.isArray(state.achievements) ? state.achievements.length : 0;
+  const powerups = normalizePowerups(state.powerups);
+  const replay = normalizeReplay(state.replay);
+  const mistakeCount = Array.isArray(state.mistakes) ? state.mistakes.length : 0;
   return `
     <div class="topbar">
       <div class="brand">
         <h1>AI 产品经理·宠物鉴别实习模拟器</h1>
         <span class="pill">v${APP_VERSION}</span>
       </div>
+      <div class="top-stats ${levelPulseActive ? "level-up" : ""}">
+        <div class="top-stats-row">
+          <span class="pill xp-pill">XP ${state.xp ?? 0}</span>
+          <span class="pill level-pill">Lv.${levelProgress.current.level} ${levelProgress.current.title}</span>
+          <span class="pill">成就 ${achievementCount}</span>
+          <span class="pill">${SKIP_CARD_NAME} ${powerups.skipTaskCharges}</span>
+          <span class="pill">${DUEL_HINT_NAME} ${powerups.duelHintCharges}</span>
+        </div>
+        <div class="top-stats-note">
+          ${
+            levelProgress.next
+              ? `距离 Lv.${levelProgress.next.level} 还差 ${levelProgress.remaining} XP｜${DUEL_HINT_NAME}仅用于结算页对打`
+              : "段位已满，继续打磨你的项目方法论"
+          }
+        </div>
+        <div class="top-stats-bar"><i style="width:${levelProgress.pct}%"></i></div>
+      </div>
       <div class="top-actions">
+        <button id="guide-open-btn">查看引导</button>
+        <button id="mistakes-btn">错题本 (${mistakeCount})</button>
+        <button id="replay-next-btn" ${replay.active ? "" : "disabled"}>下一错题</button>
+        <button id="back-scene-btn" ${canGoBack() ? "" : "disabled"}>上一步</button>
+        <button id="restart-top-btn" class="btn-danger">重新开始</button>
         <button id="save-btn">保存</button>
         <button id="export-btn">导出存档</button>
         <button id="import-btn">导入存档</button>
@@ -462,12 +1587,9 @@ function renderRoleplay(scene) {
   const thread = getRoleplayThread(roleplayId);
   const displayThread = thread.length ? thread : (rp.starter ?? []);
   const health = state.roleplay?.health ?? { ok: false, checked: false, message: "" };
+  const healthChecking = Boolean(state.roleplay?.healthChecking);
   const statusLabel = health.checked ? (health.ok ? "AI 在线" : "AI 离线") : "AI 未检测";
-  const statusNote = health.checked
-    ? health.ok
-      ? "可用：将角色扮演对话延展到更真实的沟通场景。"
-      : "未检测到 AI 服务，已切换为离线脚本模式。"
-    : "尚未检测 AI 服务，默认使用离线脚本模式。";
+  const statusNote = resolveHealthNote(health);
 
   return `
     <div class="panel">
@@ -490,6 +1612,11 @@ function renderRoleplay(scene) {
               : ""
           }
           <div class="inline-note" style="margin-top:10px">${statusNote}</div>
+          <div class="row" style="margin-top:8px">
+            <button id="roleplay-health-check" ${healthChecking ? "disabled" : ""}>
+              ${healthChecking ? "正在检测..." : "重试 AI 连接"}
+            </button>
+          </div>
         </div>
 
         <div class="card" style="margin-top:10px">
@@ -582,6 +1709,15 @@ function localRoleplayReply(scene, userText) {
   return `${pick}\n\n补充：关于你刚才提到的“${userText.slice(0, 24)}…”，我会整理一版行动清单。`;
 }
 
+function resolveHealthNote(health) {
+  if (!health?.checked) return "尚未检测 AI 服务，默认使用离线脚本模式。";
+  if (health.ok) return "可用：将角色扮演对话延展到更真实的沟通场景。";
+  if (health.message === "missing_api_key") {
+    return "已检测到 AI 服务，但未配置 API Key，已切换为离线脚本模式。";
+  }
+  return "未检测到 AI 服务，已切换为离线脚本模式。";
+}
+
 function renderCardsModal() {
   const state = store.get();
   if (!state.ui?.cardsOpen) return "";
@@ -614,12 +1750,56 @@ function renderCardsModal() {
   `;
 }
 
+function renderMistakesModal() {
+  const state = store.get();
+  if (!state.ui?.mistakesOpen) return "";
+  const mistakes = Array.isArray(state.mistakes) ? state.mistakes : [];
+  return `
+    <div id="mistakes-modal" style="position:fixed; inset:0; background: rgba(0,0,0,0.6); z-index:62; display:flex; align-items:center; justify-content:center; padding:18px">
+      <div class="panel" style="max-width: 920px; width: 100%; max-height: 84vh; overflow:hidden">
+        <div class="hd">
+          <h2>错题本</h2>
+          <button id="mistakes-close">关闭</button>
+        </div>
+        <div class="bd" style="max-height: 74vh; overflow:auto">
+          ${
+            mistakes.length
+              ? `
+                <div class="row" style="margin-bottom:10px">
+                  <button id="mistake-replay-start-modal" class="btn-primary">顺序重打</button>
+                </div>
+                ${mistakes
+                  .map(
+                    (item, index) => `
+                      <div class="card" style="margin-bottom:10px">
+                        <div class="k">#${index + 1} ${escapeHtml(item.title ?? "错误决策")}</div>
+                        <div class="v">
+                          <div>${escapeHtml(item.reason ?? "建议复盘。")}</div>
+                          <div class="inline-note" style="margin-top:8px">出现次数: ${Number(item.count ?? 1)} ｜ 场景: ${escapeHtml(item.sceneId ?? "-")}</div>
+                          <div class="row" style="margin-top:8px">
+                            <button data-replay-scene="${escapeHtml(item.sceneId ?? "")}">跳转重打</button>
+                          </div>
+                        </div>
+                      </div>
+                    `
+                  )
+                  .join("")}
+              `
+              : `<div class="inline-note">当前没有错题记录。你每次“高风险低收益”决策都会自动记录在这里。</div>`
+          }
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function render() {
   const state = store.get();
   const html = `
     <canvas id="game-canvas" class="bg-canvas"></canvas>
     <div class="app-shell">
       ${renderTopbar()}
+      ${renderMilestoneCue()}
       <div class="layout">
         ${renderMetricsPanel()}
         ${renderRightPanel()}
@@ -631,6 +1811,7 @@ function render() {
       <div id="toast" style="position:fixed; left:18px; bottom:16px; z-index:50; pointer-events:none"></div>
       <input id="file-input" type="file" accept="application/json" style="display:none" />
       ${renderCardsModal()}
+      ${renderMistakesModal()}
     </div>
   `;
   appEl.innerHTML = html;
@@ -645,6 +1826,18 @@ function render() {
 function wireEvents() {
   const state = store.get();
   const scene = getScene();
+
+  const backSceneBtn = document.getElementById("back-scene-btn");
+  if (backSceneBtn) backSceneBtn.onclick = () => goBackOneStep();
+
+  const restartTopBtn = document.getElementById("restart-top-btn");
+  if (restartTopBtn) {
+    restartTopBtn.onclick = () => {
+      storage.removeItem(SAVE_KEY);
+      resetGame({ keepContentMode: true });
+      flashToast("已重新开始");
+    };
+  }
 
   const saveBtn = document.getElementById("save-btn");
   if (saveBtn) saveBtn.onclick = () => doSave();
@@ -673,17 +1866,39 @@ function wireEvents() {
         const text = await file.text();
         const parsed = safeJsonParse(text);
         if (!parsed?.state) throw new Error("missing state");
-        const { aiLab, roleplay, ...rest } = parsed.state ?? {};
+        const next = parsed.state;
         store.set({
-          ...rest,
+          ...next,
+          contentMode: "public",
           mode: "playing",
-          roleplay: roleplay ?? {
+          powerups: normalizePowerups(next?.powerups),
+          mistakes: Array.isArray(next?.mistakes) ? next.mistakes : [],
+          replay: normalizeReplay(next?.replay),
+          duel: normalizeDuel(next?.duel),
+          flags: {
+            ...(next?.flags ?? {}),
+            guideDismissed: Boolean(next?.flags?.guideDismissed),
+            taskStatus: { ...(next?.flags?.taskStatus ?? {}) },
+            chapterEvents: { ...(next?.flags?.chapterEvents ?? {}) }
+          },
+          navStack: Array.isArray(next?.navStack) ? next.navStack : [],
+          ui: {
+            cardsOpen: Boolean(next?.ui?.cardsOpen),
+            mistakesOpen: false,
+            actionFeedback: null,
+            metricPulse: null,
+            levelPulse: null,
+            milestoneCue: null
+          },
+          roleplay: {
+            ...(next?.roleplay ?? {}),
             loading: false,
             error: null,
-            threads: {},
-            health: store.get().roleplay?.health ?? { ok: false, checked: false, message: "" }
+            healthChecking: false
           }
         });
+        const loadedScene = content?.scenes?.find((s) => s.id === next.sceneId) ?? null;
+        if (typeof loadedScene?.chapter === "number") ensureChapterEvent(loadedScene.chapter);
         flashToast("已导入存档");
         doSave();
       } catch {
@@ -695,7 +1910,35 @@ function wireEvents() {
   }
 
   const aboutBtn = document.getElementById("about-btn");
-  if (aboutBtn) aboutBtn.onclick = () => goToScene("about");
+  if (aboutBtn) {
+    aboutBtn.onclick = () => {
+      if (scene?.id && scene.id !== "about") pushNavSnapshot();
+      goToScene("about");
+    };
+  }
+
+  const guideStartBtn = document.getElementById("guide-start-btn");
+  if (guideStartBtn) {
+    guideStartBtn.onclick = () => {
+      const now = store.get();
+      store.set({ flags: { ...(now.flags ?? {}), guideDismissed: true } });
+    };
+  }
+  const guideOpenBtn = document.getElementById("guide-open-btn");
+  if (guideOpenBtn) {
+    guideOpenBtn.onclick = () => {
+      const now = store.get();
+      store.set({ flags: { ...(now.flags ?? {}), guideDismissed: false } });
+      if (scene?.id !== "start") goToScene("start");
+    };
+  }
+
+  const mistakesBtn = document.getElementById("mistakes-btn");
+  if (mistakesBtn) {
+    mistakesBtn.onclick = () => store.set({ ui: { ...(store.get().ui ?? {}), mistakesOpen: true } });
+  }
+  const replayNextBtn = document.getElementById("replay-next-btn");
+  if (replayNextBtn) replayNextBtn.onclick = () => goNextReplayScene();
 
   const cardsBtn = document.getElementById("cards-btn");
   if (cardsBtn) {
@@ -708,6 +1951,26 @@ function wireEvents() {
     cardsModal.onclick = (e) => {
       if (e.target?.id === "cards-modal") store.set({ ui: { ...(store.get().ui ?? {}), cardsOpen: false } });
     };
+  }
+
+  const mistakesClose = document.getElementById("mistakes-close");
+  if (mistakesClose) mistakesClose.onclick = () => store.set({ ui: { ...(store.get().ui ?? {}), mistakesOpen: false } });
+  const mistakesModal = document.getElementById("mistakes-modal");
+  if (mistakesModal) {
+    mistakesModal.onclick = (e) => {
+      if (e.target?.id === "mistakes-modal") store.set({ ui: { ...(store.get().ui ?? {}), mistakesOpen: false } });
+    };
+  }
+  const replayStartFromModal = document.getElementById("mistake-replay-start-modal");
+  if (replayStartFromModal) replayStartFromModal.onclick = () => startMistakeReplay();
+  for (const el of document.querySelectorAll("[data-replay-scene]")) {
+    el.addEventListener("click", () => {
+      const sceneId = el.getAttribute("data-replay-scene");
+      if (!sceneId) return;
+      goToScene(sceneId);
+      store.set({ ui: { ...(store.get().ui ?? {}), mistakesOpen: false } });
+      flashToast("已跳转到错题场景");
+    });
   }
 
   const backBtn = document.getElementById("back-btn");
@@ -732,6 +1995,24 @@ function wireEvents() {
 
   const backStartBtn = document.getElementById("back-start-btn");
   if (backStartBtn) backStartBtn.onclick = () => goToScene("start");
+
+  const mistakeReplayBtn = document.getElementById("mistake-replay-btn");
+  if (mistakeReplayBtn) mistakeReplayBtn.onclick = () => startMistakeReplay();
+  const mistakeOpenEndBtn = document.getElementById("mistake-open-end-btn");
+  if (mistakeOpenEndBtn) mistakeOpenEndBtn.onclick = () => store.set({ ui: { ...(store.get().ui ?? {}), mistakesOpen: true } });
+
+  const duelStartBtn = document.getElementById("duel-start-btn");
+  if (duelStartBtn) duelStartBtn.onclick = () => void startInterviewDuel();
+  const duelSubmitBtn = document.getElementById("duel-submit-btn");
+  if (duelSubmitBtn) duelSubmitBtn.onclick = () => void submitInterviewDuelAnswer();
+  const duelNextBtn = document.getElementById("duel-next-btn");
+  if (duelNextBtn) duelNextBtn.onclick = () => void nextInterviewDuelQuestion();
+  const duelFinishBtn = document.getElementById("duel-finish-btn");
+  if (duelFinishBtn) duelFinishBtn.onclick = () => finishInterviewDuel();
+  const duelStopBtn = document.getElementById("duel-stop-btn");
+  if (duelStopBtn) duelStopBtn.onclick = () => stopInterviewDuel();
+  const duelHintBtn = document.getElementById("duel-hint-btn");
+  if (duelHintBtn) duelHintBtn.onclick = () => useDuelHint();
 
   const copyBtn = document.getElementById("copy-portfolio");
   if (copyBtn) {
@@ -767,9 +2048,33 @@ function wireEvents() {
         const id = el.getAttribute("data-choice");
         const opt = scene.options.find((o) => o.id === id);
         if (!opt) return;
-        onChoose(scene, opt);
+        el.classList.add("choice-picked");
+        for (const btn of document.querySelectorAll("[data-choice]")) btn.setAttribute("disabled", "disabled");
+        setTimeout(() => onChoose(scene, opt), 160);
       });
     }
+  }
+
+  for (const el of document.querySelectorAll("[data-event-choice]")) {
+    el.addEventListener("click", () => {
+      const chapter = Number(el.getAttribute("data-event-chapter"));
+      const eventId = el.getAttribute("data-event-id");
+      const optionId = el.getAttribute("data-event-choice");
+      if (!chapter || !eventId || !optionId) return;
+      handleChapterEventChoice(scene, chapter, eventId, optionId);
+    });
+  }
+
+  const skipTaskBtn = document.getElementById("skip-task-btn");
+  if (skipTaskBtn && scene?.task) {
+    skipTaskBtn.onclick = () => {
+      if (!consumeSkipTaskCharge()) {
+        flashToast(`${SKIP_CARD_NAME}不足`);
+        return;
+      }
+      const result = buildSkippedTaskResult(scene);
+      completeTask(scene, result);
+    };
   }
 
   const roleplaySend = document.getElementById("roleplay-send");
@@ -791,35 +2096,21 @@ function wireEvents() {
       handleRoleplaySend(scene, text);
     });
   }
-
-  const contentModeSelect = document.getElementById("content-mode");
-  if (contentModeSelect) {
-    contentModeSelect.onchange = async () => {
-      const next = contentModeSelect.value;
-      if (next === state.contentMode) return;
-      store.set({
-        contentMode: next,
-        mode: "boot",
-        sceneId: "start",
-        chapterIndex: 0,
-        deliverables: {},
-        history: [],
-        metrics: defaultMetrics(),
-        flags: {},
-        roleplay: { loading: false, error: null, threads: {}, health: store.get().roleplay?.health ?? { ok: false, checked: false, message: "" } }
-      });
-      content = await loadContentBundle(next);
-      store.set({ mode: "playing" });
-      doSave();
-      flashToast(`已切换到 ${next} 内容`);
+  const healthCheckBtn = document.getElementById("roleplay-health-check");
+  if (healthCheckBtn) {
+    healthCheckBtn.onclick = () => {
+      void checkAiHealth();
     };
   }
 
   document.onkeydown = (e) => {
     if (store.get().ui?.cardsOpen && e.key === "Escape") store.set({ ui: { ...(store.get().ui ?? {}), cardsOpen: false } });
+    if (store.get().ui?.mistakesOpen && e.key === "Escape") store.set({ ui: { ...(store.get().ui ?? {}), mistakesOpen: false } });
     if (e.key.toLowerCase() === "s" && (e.metaKey || e.ctrlKey)) return;
     if (e.key.toLowerCase() === "s") doSave();
     if (e.key.toLowerCase() === "r") resetGame({ keepContentMode: true });
+    if (e.key.toLowerCase() === "m") store.set({ ui: { ...(store.get().ui ?? {}), mistakesOpen: true } });
+    if (e.key.toLowerCase() === "n") goNextReplayScene();
     if (e.key.toLowerCase() === "f") toggleFullscreen();
     handleKeyboardAutomation(e);
   };
@@ -872,13 +2163,259 @@ async function handleRoleplaySend(scene, presetText) {
 
   const roleplayId = scene.roleplay?.id ?? scene.id;
   appendRoleplayMessage(roleplayId, { role: "你", text });
-  const health = store.get().roleplay?.health;
+  let health = store.get().roleplay?.health;
+  if (!health?.ok) {
+    await checkAiHealth({ silent: true });
+    health = store.get().roleplay?.health;
+  }
   if (health?.ok) {
     await requestRoleplay(scene, text);
   } else {
     const reply = localRoleplayReply(scene, text);
     appendRoleplayMessage(roleplayId, { role: "AI", text: reply });
   }
+}
+
+function handleChapterEventChoice(scene, chapter, eventId, optionId) {
+  const event = getChapterEventById(chapter, eventId);
+  const option = event?.options?.find((it) => it.id === optionId);
+  if (!event || !option) return;
+  pushNavSnapshot();
+  applyDelta(option.delta);
+  const xpResult = grantXp(XP_PER_EVENT);
+  const state = store.get();
+  const chapterEvents = { ...(state.flags?.chapterEvents ?? {}) };
+  chapterEvents[chapter] = { ...(chapterEvents[chapter] ?? {}), eventId, resolved: true, chosenId: optionId };
+  store.set({ flags: { ...(state.flags ?? {}), chapterEvents } });
+  const wrongRecorded = maybeRecordWrongEvent(scene?.id ?? "", event.title, option);
+  const levelUpTitle = xpResult.leveledUp ? `｜升阶 Lv.${xpResult.nextLevel.level} ${xpResult.nextLevel.title}` : "";
+  setActionFeedback({
+    title: `面试突发题：${event.title}（+${XP_PER_EVENT} XP）${levelUpTitle}`,
+    note: `${option.note ?? "你完成了一次突发取舍训练。"}${wrongRecorded ? " 这次应对已记录到错题本。" : ""}`,
+    delta: option.delta
+  });
+  triggerMilestoneCue({
+    levelInfo: xpResult.leveledUp ? xpResult.nextLevel : null,
+    achievements: [],
+    rewards: []
+  });
+  recordHistory({ kind: "chapter_event", sceneId: scene?.id ?? "", chapter, eventId, optionId, delta: option.delta });
+  doSave();
+}
+
+function getCurrentDuel() {
+  return { ...defaultDuelState(), ...(store.get().duel ?? {}) };
+}
+
+function setDuel(patch) {
+  const duel = getCurrentDuel();
+  store.set({ duel: { ...duel, ...patch } });
+}
+
+async function requestAiJson(action, payload) {
+  const res = await fetch("/api/ai", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, payload })
+  });
+  const text = await res.text();
+  const json = safeJsonParse(text);
+  if (!res.ok) {
+    throw new Error(json?.error || text || "AI 服务不可用");
+  }
+  return json?.result?.json ?? json?.result ?? {};
+}
+
+function localDuelQuestion(round) {
+  const idx = Math.max(0, (round - 1) % LOCAL_DUEL_QUESTIONS.length);
+  const item = LOCAL_DUEL_QUESTIONS[idx];
+  return {
+    question: item.question,
+    focus: item.focus,
+    rubric: item.rubric,
+    followup: "请给出可执行的下一步，不要只说原则。"
+  };
+}
+
+function localDuelReview(question, answer) {
+  const keywords = Array.isArray(question?.keywords) ? question.keywords : [];
+  const normalized = String(answer ?? "").toLowerCase();
+  const hit = keywords.filter((kw) => normalized.includes(String(kw).toLowerCase())).length;
+  const score = Math.max(1, Math.min(5, Math.round((hit / Math.max(1, keywords.length)) * 5)));
+  return {
+    score,
+    verdict: score >= 4 ? "结构化较完整，具备可落地性。" : score >= 3 ? "思路可用，但证据和风险控制不足。" : "回答偏泛，需要补充可验证动作。",
+    strength: score >= 3 ? "表达有取舍意识。" : "有基本方向感。",
+    miss: score >= 4 ? "可进一步量化目标与护栏。" : "缺少指标口径、验证路径或回滚策略。",
+    next: "建议按“目标-方案-验证-风险-下一步”五段式回答。"
+  };
+}
+
+async function generateDuelQuestion(round) {
+  const health = store.get().roleplay?.health;
+  if (health?.ok) {
+    try {
+      const result = await requestAiJson("interview_duel_question", {
+        ...buildAiPayload(),
+        round,
+        duelHistory: getCurrentDuel().history
+      });
+      if (typeof result?.question === "string" && result.question.trim()) {
+        return {
+          question: result.question.trim(),
+          focus: String(result.focus ?? "结构化表达"),
+          rubric: Array.isArray(result.rubric) ? result.rubric.slice(0, 4) : [],
+          followup: String(result.followup ?? ""),
+          keywords: []
+        };
+      }
+    } catch (err) {
+      console.warn("duel question fallback:", err);
+    }
+  }
+  return localDuelQuestion(round);
+}
+
+async function evaluateDuelAnswer(question, answer) {
+  const health = store.get().roleplay?.health;
+  if (health?.ok) {
+    try {
+      const result = await requestAiJson("interview_duel_review", {
+        ...buildAiPayload(),
+        question,
+        answer
+      });
+      const score = Math.max(1, Math.min(5, Number(result?.score ?? 3)));
+      return {
+        score,
+        verdict: String(result?.verdict ?? "回答已评估。"),
+        strength: String(result?.strength ?? "有基本框架。"),
+        miss: String(result?.miss ?? "建议补充验证与风险控制。"),
+        next: String(result?.next ?? "下一轮尝试更明确地给出指标与动作。")
+      };
+    } catch (err) {
+      console.warn("duel review fallback:", err);
+    }
+  }
+  return localDuelReview(question, answer);
+}
+
+async function startInterviewDuel() {
+  setDuel({ ...defaultDuelState(), active: true, loading: true });
+  await nextInterviewDuelQuestion({ fromStart: true });
+}
+
+async function nextInterviewDuelQuestion({ fromStart = false } = {}) {
+  const duel = getCurrentDuel();
+  const nextRound = fromStart ? 1 : duel.round + 1;
+  if (nextRound > duel.maxRounds) {
+    finishInterviewDuel();
+    return;
+  }
+  setDuel({ loading: true, error: null, currentFeedback: null, hintText: "" });
+  try {
+    const question = await generateDuelQuestion(nextRound);
+    setDuel({
+      active: true,
+      loading: false,
+      round: nextRound,
+      currentQuestion: question,
+      currentFeedback: null,
+      hintText: ""
+    });
+  } catch (err) {
+    setDuel({ loading: false, error: String(err?.message || err) });
+  }
+}
+
+async function submitInterviewDuelAnswer() {
+  const input = document.getElementById("duel-answer-input");
+  const answer = (input?.value ?? "").trim();
+  if (!answer) {
+    flashToast("请先输入回答");
+    return;
+  }
+  const duel = getCurrentDuel();
+  if (!duel.currentQuestion) return;
+  setDuel({ loading: true, error: null });
+  try {
+    const feedback = await evaluateDuelAnswer(duel.currentQuestion, answer);
+    const history = duel.history.concat([
+      {
+        round: duel.round,
+        question: duel.currentQuestion.question,
+        answer,
+        feedback
+      }
+    ]);
+    setDuel({
+      loading: false,
+      history,
+      currentFeedback: feedback,
+      totalScore: duel.totalScore + Number(feedback.score ?? 0),
+      hintText: ""
+    });
+    recordHistory({ kind: "duel_round", round: duel.round, score: feedback.score, verdict: feedback.verdict });
+    if (Number(feedback.score ?? 0) <= 2) {
+      pushMistake({
+        kind: "duel",
+        sceneId: "c4_task_abreadout",
+        refId: `duel_round_${duel.round}`,
+        title: `面试对打第 ${duel.round} 轮`,
+        reason: `评分 ${feedback.score}/5。${feedback.miss || "建议补齐结构化回答。"}`
+      });
+    }
+  } catch (err) {
+    setDuel({ loading: false, error: String(err?.message || err) });
+  }
+}
+
+function useDuelHint() {
+  const state = store.get();
+  const powerups = normalizePowerups(state.powerups);
+  if (powerups.duelHintCharges <= 0) {
+    flashToast(`${DUEL_HINT_NAME}已用完`);
+    return;
+  }
+  const duel = getCurrentDuel();
+  if (!duel.currentQuestion) return;
+  powerups.duelHintCharges -= 1;
+  const hints = Array.isArray(duel.currentQuestion.rubric) ? duel.currentQuestion.rubric.slice(0, 3) : [];
+  const hintText = hints.length ? `提示：优先覆盖 ${hints.join("、")}` : "提示：先说目标，再说验证与风险。";
+  store.set({ powerups, duel: { ...duel, hintText } });
+}
+
+function buildDuelSummary(duel) {
+  const avg = duel.round ? (duel.totalScore / duel.round).toFixed(1) : "0.0";
+  const weakRounds = duel.history.filter((it) => Number(it.feedback?.score ?? 0) <= 2);
+  const strengths = duel.history
+    .map((it) => it.feedback?.strength)
+    .filter(Boolean)
+    .slice(0, 2)
+    .join("；");
+  const misses = weakRounds
+    .map((it) => it.feedback?.miss)
+    .filter(Boolean)
+    .slice(0, 2)
+    .join("；");
+  return [
+    `总分：${duel.totalScore}/${duel.maxRounds * 5}（平均 ${avg}/5）`,
+    strengths ? `亮点：${strengths}` : "亮点：具备基本产品思维。",
+    misses ? `待改进：${misses}` : "待改进：继续提升数据验证与风险表达。",
+    "建议：面试回答优先使用“目标-方案-验证-风险-下一步”结构。"
+  ].join("\n");
+}
+
+function finishInterviewDuel() {
+  const duel = getCurrentDuel();
+  if (!duel.active) return;
+  const summary = buildDuelSummary(duel);
+  setDuel({ ...duel, summary, loading: false, error: null });
+  flashToast("面试对打总结已生成");
+}
+
+function stopInterviewDuel() {
+  setDuel(defaultDuelState());
 }
 
 let canvasWired = false;
@@ -959,10 +2496,17 @@ function mountTask(scene) {
 
 function buildPortfolioSummary() {
   const state = store.get();
-  const name = state.contentMode === "private" ? "（本地真名版）" : "（Public 虚构版）";
+  const level = getLevelFromXp(state.xp ?? 0);
+  const mistakes = Array.isArray(state.mistakes) ? state.mistakes.length : 0;
+  const duel = normalizeDuel(state.duel);
   const lines = [];
-  lines.push(`项目: 宠物鉴别教育模拟${name}`);
+  lines.push("项目: 宠物鉴别教育模拟");
   lines.push(`角色: AI 产品经理（模拟）`);
+  lines.push(`段位: Lv.${level.level} ${level.title}（XP ${state.xp ?? 0}）`);
+  lines.push(`错题复盘: ${mistakes} 条`);
+  if (duel.history.length) {
+    lines.push(`面试对打: ${duel.totalScore}/${duel.maxRounds * 5}`);
+  }
   lines.push("");
   lines.push("我在一次端到端项目周期内完成了:");
   lines.push("- 立项: 将业务目标拆解为北极星指标与过程指标，并明确约束与风险边界");
@@ -1020,21 +2564,9 @@ function flashToast(text) {
 
 async function boot() {
   initGlobalHooks();
-  content = await loadContentBundle("public");
-  const avail = await loadContentBundle("__probe_private__");
-  store.set({ contentPrivateAvailable: Boolean(avail?.privateAvailable) });
-  const raw = storage.getItem(SAVE_KEY);
-  const parsed = raw ? safeJsonParse(raw) : null;
-  if (parsed?.state?.contentMode) {
-    const nextMode = parsed.state.contentMode;
-    if (nextMode === "private" && !store.get().contentPrivateAvailable) {
-      store.set({ contentMode: "public" });
-    } else {
-      store.set({ contentMode: nextMode });
-      content = await loadContentBundle(nextMode);
-    }
-  }
-  await checkAiHealth();
+  content = await loadContentBundle();
+  await checkAiHealth({ silent: true });
+  startHealthPolling();
   store.set({ mode: "playing" });
   store.subscribe(scheduleRender);
   scheduleRender();
@@ -1054,25 +2586,48 @@ function scheduleRender() {
   });
 }
 
-async function checkAiHealth() {
+function startHealthPolling() {
+  if (healthPollTimer) return;
+  healthPollTimer = window.setInterval(() => {
+    void checkAiHealth({ silent: true });
+  }, 30000);
+}
+
+async function checkAiHealth({ silent = false } = {}) {
+  const previous = store.get().roleplay ?? {};
+  store.set({
+    roleplay: {
+      ...previous,
+      healthChecking: true
+    }
+  });
   try {
     const res = await fetch("/api/health");
     const text = await res.text();
     const json = safeJsonParse(text);
     const ok = Boolean(res.ok && json?.ok);
+    const message = typeof json?.message === "string" && json.message ? json.message : ok ? "ready" : `http_${res.status}`;
     store.set({
       roleplay: {
         ...(store.get().roleplay ?? {}),
-        health: { ok, checked: true, message: json?.message ?? "" }
+        healthChecking: false,
+        health: { ok, checked: true, message }
       }
     });
+    if (!silent) {
+      if (ok) flashToast("AI 服务已连接");
+      else if (message === "missing_api_key") flashToast("AI 服务已启动，但未配置 API Key");
+      else flashToast("未检测到 AI 服务，已使用离线模式");
+    }
   } catch {
     store.set({
       roleplay: {
         ...(store.get().roleplay ?? {}),
-        health: { ok: false, checked: true, message: "AI 服务不可用" }
+        healthChecking: false,
+        health: { ok: false, checked: true, message: "unreachable" }
       }
     });
+    if (!silent) flashToast("未检测到 AI 服务，已使用离线模式");
   }
 }
 
@@ -1124,6 +2679,8 @@ function buildAiPayload() {
     chapterIndex: state.chapterIndex,
     metrics: state.metrics,
     deliverables: state.deliverables,
-    history: state.history
+    history: state.history,
+    mistakes: state.mistakes,
+    powerups: state.powerups
   };
 }

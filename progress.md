@@ -15,7 +15,37 @@ Notes:
 - Switched Vite build base to `./` so static assets work correctly on GitHub Pages project paths.
 - Updated README for distribution-first usage: Play Now first, local/AI setup optional.
 - Updated A/B readout task to disable AI generation in offline mode and show explicit fallback note.
+- Improved AI health UX in roleplay panel: explicit distinction between `service unreachable` and `missing API key`, plus manual reconnect button.
+- Added automatic health re-check (every 30s) and send-time re-check so AI can recover without full page refresh.
+- Added reversible navigation with `上一步`: restores previous scene + metrics + deliverables/history state via snapshot stack (instead of shallow scene jump).
+- Removed all Private mode support end-to-end (content loader, UI toggle, private templates/docs). Project is now Public-only for simpler open-source distribution.
+- Simplified load/import path by removing legacy compatibility branches that are not needed for this release.
+- Added first-time onboarding overlay on start screen with clear objective/how-to-win guidance and a manual `查看引导` entry in topbar.
+- Added persistent mission panel in scenes (chapter objective, current action, chapter/global progress) to improve wayfinding.
+- Moved start-screen onboarding card to the top so users see guidance before interacting with options.
+- Removed explicit Public-mode disclaimer wording from start/about/content text per product copy preference.
+- Reworked level feedback copy to interview context (decision/task/event all use “面试进度更新” style messaging).
+- Added chapter random incidents (1 per chapter, randomly assigned each run) with explicit metric deltas and wrong-decision capture.
+- Added functional rewards tied to achievements:
+  - `first_task` => skip-task card (`快进卡`) for selected low-priority tasks.
+  - `chapter_2` => `洞察透镜` hidden context hints in later chapters.
+  - `ab_analyst` => interview-duel hint charges.
+- Added mistake notebook + replay loop:
+  - Auto-records risky/low-value decisions (choice/task/event/duel low score).
+  - Topbar `错题本` modal with one-click jump/replay and sequential replay mode (`下一错题`).
+- Added interview duel mode on settlement page:
+  - 5-round mock interview.
+  - Uses AI actions (`interview_duel_question` / `interview_duel_review`) when available.
+  - Falls back to local scripted questions/evaluation when AI unavailable.
+- Extended AI server actions in `server/index.mjs` to support duel question generation + answer review.
+- Tried running smoke Playwright (`bash scripts/run_smoke_playwright.sh http://localhost:5173`); still blocked by missing `playwright` package in this environment.
+- Added stronger milestone UX:
+  - New centered milestone cue overlay for level-up / achievement unlock events.
+  - Cue auto-hides and shows unlocked badges + reward summary.
+- Clarified topbar counters:
+  - Replaced ambiguous `提示 0` with `面试锦囊 0` and added contextual note that it is used in the interview duel.
+- Renamed skip powerup globally from `快进卡` to `直通终面卡` (buttons, rewards, feedback, mission/topbar labels).
 
 TODO:
-- Install Playwright (if desired) and run `bash scripts/run_smoke_playwright.sh http://localhost:5173` (currently fails in this environment because `playwright` package is missing).
+- Install Playwright and run `bash scripts/run_smoke_playwright.sh http://localhost:5173` (still blocked in this environment: `playwright` package missing).
 - Add per-scene “推荐知识卡” tags (currently a global modal list).
