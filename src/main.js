@@ -320,7 +320,7 @@ const store = createStore({
   deliverables: {},
   history: [],
   flags: { guideDismissed: false, taskStatus: {}, chapterEvents: {} },
-  ui: { cardsOpen: false, mistakesOpen: false, actionFeedback: null, metricPulse: null, levelPulse: null, milestoneCue: null },
+  ui: { cardsOpen: false, mistakesOpen: false, guideOpen: false, actionFeedback: null, metricPulse: null, levelPulse: null, milestoneCue: null },
   roleplay: { loading: false, error: null, threads: {}, healthChecking: false, health: { ok: false, checked: false, message: "" } },
   clockMs: 0
 });
@@ -417,11 +417,18 @@ function isPositiveMetricDelta(metricKey, delta) {
   return delta * direction > 0;
 }
 
+function formatMetricImpact(metricKey, delta) {
+  if (typeof delta !== "number" || Math.abs(delta) <= 0.0001) return `${metricLabel(metricKey)}无显著变化`;
+  const trend = isPositiveMetricDelta(metricKey, delta) ? "改善" : "承压";
+  return `${metricLabel(metricKey)}${trend} ${Math.abs(delta).toFixed(2)}`;
+}
+
 function getFeedbackOutcome(delta) {
   const entries = Object.entries(delta ?? {}).filter(([, value]) => typeof value === "number" && Math.abs(value) > 0.0001);
   if (!entries.length) {
     return {
       tone: "neutral",
+      verdict: "中性信号",
       summary: "本次操作影响较小，建议结合后续数据再判断。",
       suggestion: "下一步建议：继续推进当前章节任务，优先补充可验证数据。",
       chips: []
@@ -453,15 +460,16 @@ function getFeedbackOutcome(delta) {
       : tone === "bad"
         ? "下一步建议：优先降风险或补兜底，再继续放量。"
         : "下一步建议：补充验证数据，再决定是否扩大策略。";
+  const verdict = tone === "good" ? "可推进" : tone === "bad" ? "需止损" : "待验证";
   const chips = entries
     .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
     .slice(0, 4)
     .map(([key, value]) => ({
       key,
-      text: `${metricLabel(key)} ${fmtMetric(value)}`,
+      text: formatMetricImpact(key, value),
       positive: isPositiveMetricDelta(key, value)
     }));
-  return { tone, summary, suggestion, chips };
+  return { tone, verdict, summary, suggestion, chips };
 }
 
 function doSave() {
@@ -507,6 +515,7 @@ function doLoad() {
     ui: {
       cardsOpen: Boolean(next?.ui?.cardsOpen),
       mistakesOpen: false,
+      guideOpen: false,
       actionFeedback: null,
       metricPulse: null,
       levelPulse: null,
@@ -543,7 +552,7 @@ function resetGame({ keepContentMode }) {
     deliverables: {},
     history: [],
     flags: { guideDismissed: false, taskStatus: {}, chapterEvents: {} },
-    ui: { cardsOpen: false, mistakesOpen: false, actionFeedback: null, metricPulse: null, levelPulse: null, milestoneCue: null },
+    ui: { cardsOpen: false, mistakesOpen: false, guideOpen: false, actionFeedback: null, metricPulse: null, levelPulse: null, milestoneCue: null },
     roleplay: { loading: false, error: null, threads: {}, healthChecking: false, health: prev.roleplay?.health ?? { ok: false, checked: false, message: "" } },
     clockMs: 0
   });
@@ -705,8 +714,7 @@ function summarizeDeltaFocus(delta) {
   if (!entries.length) return "未形成可观测指标变化";
   entries.sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
   const [key, value] = entries[0];
-  if (value >= 0) return `${metricLabel(key)}提升明显`;
-  return `${metricLabel(key)}下滑明显`;
+  return formatMetricImpact(key, value);
 }
 
 function isWrongDecision(delta) {
@@ -942,6 +950,7 @@ function snapshotStateForBack(state) {
     ui: {
       cardsOpen: false,
       mistakesOpen: false,
+      guideOpen: false,
       actionFeedback: null,
       metricPulse: null,
       levelPulse: null,
@@ -999,6 +1008,7 @@ function goBackOneStep() {
     ui: {
       cardsOpen: false,
       mistakesOpen: false,
+      guideOpen: false,
       actionFeedback: null,
       metricPulse: null,
       levelPulse: null,
@@ -1123,7 +1133,7 @@ function renderMetricsPanel() {
   const state = store.get();
   const keys = Object.keys(state.metrics);
   const pulse = state.ui?.metricPulse ?? null;
-  const pulseActive = pulse?.at && Date.now() - pulse.at < 2800;
+  const pulseActive = Boolean(pulse && Object.keys(pulse.delta ?? {}).length);
   const feedback = state.ui?.actionFeedback;
   const showFeedbackHint = Boolean(feedback);
   const outcome = getFeedbackOutcome(feedback?.delta ?? {});
@@ -1136,7 +1146,7 @@ function renderMetricsPanel() {
       <div class="bd">
         ${
           showFeedbackHint
-            ? `<div class="impact-mini ${outcome.tone}">${escapeHtml(feedback.title ?? "决策反馈")}：${escapeHtml(outcome.summary)}</div>`
+            ? `<div class="impact-mini ${outcome.tone}"><div class="mini-title">${escapeHtml(feedback.title ?? "决策反馈")}｜${escapeHtml(outcome.verdict)}</div><div class="mini-body">${escapeHtml(outcome.summary)}</div></div>`
             : ""
         }
         <div class="metrics">
@@ -1154,7 +1164,7 @@ function renderMetricsPanel() {
                     <div class="name">${metricLabel(k)}</div>
                     <div class="val">
                       ${fmtMetric(v)} (${p}%)
-                      ${hasDelta ? `<span class="metric-delta ${isPositive ? "up" : "down"}">${fmtMetric(d)}</span>` : ""}
+                      ${hasDelta ? `<span class="metric-delta ${isPositive ? "up" : "down"}">${escapeHtml(formatMetricImpact(k, d))}</span>` : ""}
                     </div>
                   </div>
                   <div class="bar"><i style="width:${p}%"></i></div>
@@ -1496,13 +1506,18 @@ function renderActionFeedback() {
   const feedback = store.get().ui?.actionFeedback;
   if (!feedback) return "";
   const levelUp = /升阶/.test(String(feedback.title ?? ""));
+  const fresh = feedback?.at && Date.now() - feedback.at < 12000;
   const outcome = getFeedbackOutcome(feedback.delta ?? {});
   const deltaEntries = Object.entries(feedback.delta ?? {}).filter(([, value]) => typeof value === "number" && Math.abs(value) > 0.0001);
   const deltaText = deltaEntries.length
-    ? deltaEntries.map(([key, value]) => `${metricLabel(key)} ${fmtMetric(value)}`).join(" ｜ ")
+    ? deltaEntries.map(([key, value]) => formatMetricImpact(key, value)).join(" ｜ ")
     : "本次操作不改变指标";
   return `
-    <div class="impact-banner ${levelUp ? "level-up" : ""} ${outcome.tone}">
+    <div class="impact-banner ${levelUp ? "level-up" : ""} ${outcome.tone} ${fresh ? "fresh" : ""}">
+      <div class="impact-meta">
+        <span class="impact-badge ${outcome.tone}">${escapeHtml(outcome.verdict)}</span>
+        <span class="impact-live">反馈会保留到下一次决策更新</span>
+      </div>
       <div class="title">${escapeHtml(feedback.title ?? "决策已生效")}</div>
       <div class="delta">${escapeHtml(deltaText)}</div>
       <div class="impact-summary">${escapeHtml(outcome.summary)}</div>
@@ -1798,6 +1813,33 @@ function renderCardsModal() {
   `;
 }
 
+function renderGuideModal() {
+  const state = store.get();
+  if (!state.ui?.guideOpen) return "";
+  return `
+    <div id="guide-modal" style="position:fixed; inset:0; background: rgba(0,0,0,0.58); z-index:64; display:flex; align-items:center; justify-content:center; padding:18px">
+      <div class="panel" style="max-width: 760px; width: 100%">
+        <div class="hd">
+          <h2>训练引导</h2>
+          <button id="guide-close">关闭</button>
+        </div>
+        <div class="bd">
+          <div class="guide-card">
+            <div class="guide-title">开局任务卡</div>
+            <div class="guide-row"><span>你的身份</span><b>AI 产品经理（模拟训练）</b></div>
+            <div class="guide-row"><span>核心目标</span><b>完成 4 章 13 任务，建立 PM 闭环能力</b></div>
+            <div class="guide-row"><span>操作方式</span><b>每个场景做选择或提交任务，观察指标与反馈</b></div>
+            <div class="guide-row"><span>收益产出</span><b>结算页得到可复制作品集摘要</b></div>
+            <div class="guide-actions">
+              <button id="guide-close-cta" class="btn-primary">继续当前进度</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function renderMistakesModal() {
   const state = store.get();
   if (!state.ui?.mistakesOpen) return "";
@@ -1853,11 +1895,12 @@ function render() {
         ${renderRightPanel()}
       </div>
       <div class="footer">
-        <div>快捷键: <span class="kbd">S</span> 保存 <span class="kbd">R</span> 重开 <span class="kbd">F</span> 全屏</div>
+        <div>操作提示: 使用顶栏按钮进行保存、导出、返回和重开。</div>
         <div class="pill">存档: ${storage.getItem(SAVE_KEY) ? "已存在" : "无"}</div>
       </div>
       <div id="toast" style="position:fixed; left:18px; bottom:16px; z-index:50; pointer-events:none"></div>
       <input id="file-input" type="file" accept="application/json" style="display:none" />
+      ${renderGuideModal()}
       ${renderCardsModal()}
       ${renderMistakesModal()}
     </div>
@@ -1933,6 +1976,7 @@ function wireEvents() {
           ui: {
             cardsOpen: Boolean(next?.ui?.cardsOpen),
             mistakesOpen: false,
+            guideOpen: false,
             actionFeedback: null,
             metricPulse: null,
             levelPulse: null,
@@ -1969,15 +2013,27 @@ function wireEvents() {
   if (guideStartBtn) {
     guideStartBtn.onclick = () => {
       const now = store.get();
-      store.set({ flags: { ...(now.flags ?? {}), guideDismissed: true } });
+      store.set({
+        flags: { ...(now.flags ?? {}), guideDismissed: true },
+        ui: { ...(now.ui ?? {}), guideOpen: false }
+      });
     };
   }
   const guideOpenBtn = document.getElementById("guide-open-btn");
   if (guideOpenBtn) {
     guideOpenBtn.onclick = () => {
       const now = store.get();
-      store.set({ flags: { ...(now.flags ?? {}), guideDismissed: false } });
-      if (scene?.id !== "start") goToScene("start");
+      store.set({ ui: { ...(now.ui ?? {}), guideOpen: true } });
+    };
+  }
+  const guideClose = document.getElementById("guide-close");
+  if (guideClose) guideClose.onclick = () => store.set({ ui: { ...(store.get().ui ?? {}), guideOpen: false } });
+  const guideCloseCta = document.getElementById("guide-close-cta");
+  if (guideCloseCta) guideCloseCta.onclick = () => store.set({ ui: { ...(store.get().ui ?? {}), guideOpen: false } });
+  const guideModal = document.getElementById("guide-modal");
+  if (guideModal) {
+    guideModal.onclick = (e) => {
+      if (e.target?.id === "guide-modal") store.set({ ui: { ...(store.get().ui ?? {}), guideOpen: false } });
     };
   }
 
@@ -2151,56 +2207,7 @@ function wireEvents() {
     };
   }
 
-  document.onkeydown = (e) => {
-    if (store.get().ui?.cardsOpen && e.key === "Escape") store.set({ ui: { ...(store.get().ui ?? {}), cardsOpen: false } });
-    if (store.get().ui?.mistakesOpen && e.key === "Escape") store.set({ ui: { ...(store.get().ui ?? {}), mistakesOpen: false } });
-    if (e.key.toLowerCase() === "s" && (e.metaKey || e.ctrlKey)) return;
-    if (e.key.toLowerCase() === "s") doSave();
-    if (e.key.toLowerCase() === "r") resetGame({ keepContentMode: true });
-    if (e.key.toLowerCase() === "m") store.set({ ui: { ...(store.get().ui ?? {}), mistakesOpen: true } });
-    if (e.key.toLowerCase() === "n") goNextReplayScene();
-    if (e.key.toLowerCase() === "f") toggleFullscreen();
-    handleKeyboardAutomation(e);
-  };
-}
-
-function handleKeyboardAutomation(e) {
-  if (e.repeat) return;
-  const target = e.target;
-  const tag = target?.tagName?.toLowerCase?.() ?? "";
-  const isEditable = tag === "input" || tag === "textarea" || tag === "select" || target?.isContentEditable;
-  if (isEditable) return;
-
-  const key = e.key.toLowerCase();
-  const clickIf = (id) => {
-    const el = document.getElementById(id);
-    if (el && typeof el.click === "function" && !el.disabled) {
-      el.click();
-      return true;
-    }
-    return false;
-  };
-
-  if (key === "a") {
-    if (clickIf("auto")) return;
-    const firstChoice = document.querySelector("[data-choice]");
-    if (firstChoice) firstChoice.click();
-    return;
-  }
-  if (key === "b") {
-    if (clickIf("submit")) return;
-    const second = document.querySelectorAll("[data-choice]")[1];
-    if (second) second.click();
-    return;
-  }
-  if (key === "enter") {
-    if (clickIf("start-btn")) return;
-    if (clickIf("back-btn")) return;
-    if (clickIf("restart-btn")) return;
-    if (clickIf("submit")) return;
-    const firstChoice = document.querySelector("[data-choice]");
-    if (firstChoice) firstChoice.click();
-  }
+  document.onkeydown = null;
 }
 
 async function handleRoleplaySend(scene, presetText) {

@@ -293,6 +293,16 @@ button:disabled {
   background: rgba(245, 158, 11, 0.12);
 }
 
+.impact-mini .mini-title {
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.97);
+}
+
+.impact-mini .mini-body {
+  margin-top: 4px;
+  color: rgba(255, 255, 255, 0.9);
+}
+
 .impact-mini.good {
   border-color: rgba(52, 211, 153, 0.45);
   background: rgba(52, 211, 153, 0.14);
@@ -305,10 +315,11 @@ button:disabled {
 
 .metric-delta {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 10.5px;
   border: 1px solid transparent;
   border-radius: 999px;
   padding: 2px 6px;
+  white-space: nowrap;
 }
 
 .metric-delta.up {
@@ -567,6 +578,46 @@ label {
   font-weight: 600;
 }
 
+.impact-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.impact-badge {
+  font-family: var(--mono);
+  font-size: 11px;
+  border-radius: 999px;
+  padding: 2px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.impact-badge.good {
+  border-color: rgba(52, 211, 153, 0.48);
+  color: rgba(52, 211, 153, 0.98);
+  background: rgba(52, 211, 153, 0.12);
+}
+
+.impact-badge.bad {
+  border-color: rgba(251, 113, 133, 0.48);
+  color: rgba(251, 113, 133, 0.98);
+  background: rgba(251, 113, 133, 0.12);
+}
+
+.impact-badge.neutral {
+  border-color: rgba(148, 163, 184, 0.46);
+  color: rgba(226, 232, 240, 0.98);
+  background: rgba(148, 163, 184, 0.16);
+}
+
+.impact-live {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.82);
+}
+
 .impact-banner .delta {
   margin-top: 5px;
   font-family: var(--mono);
@@ -583,6 +634,10 @@ label {
 .impact-banner.level-up {
   border-color: rgba(251, 146, 60, 0.7);
   box-shadow: 0 0 0 1px rgba(251, 146, 60, 0.34), 0 14px 30px rgba(0, 0, 0, 0.32);
+}
+
+.impact-banner.fresh {
+  animation: banner-in 200ms ease, level-up-flash 760ms ease 1;
 }
 
 .impact-banner.good {
@@ -805,17 +860,6 @@ label {
   color: rgba(255, 255, 255, 0.55);
   font-size: 12px;
   padding: 0 6px;
-}
-
-.kbd {
-  font-family: var(--mono);
-  font-size: 11px;
-  padding: 2px 6px;
-  border: 1px solid var(--stroke);
-  border-bottom-color: rgba(255, 255, 255, 0.22);
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.2);
-  color: rgba(255, 255, 255, 0.75);
 }
 
 @media (max-width: 980px) {
